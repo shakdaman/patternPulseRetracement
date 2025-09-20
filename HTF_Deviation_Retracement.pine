@@ -1,0 +1,502 @@
+﻿//  Gemini
+//@version=6
+// HTF = Higher Timeframe, D&R = Deviation & Retracement
+indicator("HTF Deviation & Retracement", "HTF D&R", overlay = true)
+
+// --- User Inputs ---
+// Reformatting inputs to be multi-line for compiler stability and readability.
+i_htf = input.timeframe("D", "Higher Timeframe")
+i_retracePercent = input.float(50.0, "Retracement Percentage", 0.1, 100.0)
+i_showBoxes = input.bool(true, "Show HTF Range Boxes")
+i_boxColor = input.color(color.gray, "Box Color")
+i_boxTransparency = input.int(100, "Box Transparency", 0, 100)
+i_showHTFLines = input.bool(true, "Show HTF Range Lines")
+i_lineLength = input.int(20, "HTF Line Length (bars)", 5, 50)
+
+// Retracement Line Colors and Controls
+i_showRetracementLines = input.bool(true, "Show Additional Retracement Lines")
+i_show125Retrace = input.bool(true, "Show 12.5% Retracement")
+i_show25Retrace = input.bool(true, "Show 25% Retracement")
+i_show50Retrace = input.bool(true, "Show 50% Retracement")
+
+i_htfHighColor = input.color(color.white, "0% Line Color (HTF High)")
+i_htfLowColor = input.color(color.white, "100% Line Color (HTF Low)")
+i_125RetraceColor = input.color(color.red, "12.5% Retracement Line Color")
+i_25RetraceColor = input.color(color.purple, "25% Retracement Line Color")
+i_50RetraceColor = input.color(color.green, "50% Retracement Line Color")
+
+// Label Styling
+i_labelFontSize = input.string("Normal", "Label Font Size", options=["Tiny", "Small", "Normal", "Large"])
+i_labelOffset = input.int(2, "Label Offset (bars)", 1, 10)
+
+// Debug Controls
+i_showDebugLabel = input.bool(false, "Show Debug Information")
+
+// Retracement Alert Controls
+i_enableRetracementAlerts = input.bool(true, "Enable Retracement Line Alerts")
+i_alertOn125Retrace = input.bool(true, "Alert on 12.5% Retracement")
+i_alertOn25Retrace = input.bool(true, "Alert on 25% Retracement")
+i_alertOn50Retrace = input.bool(true, "Alert on 50% Retracement")
+
+// Font size conversion function
+getFontSize() =>
+    switch i_labelFontSize
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        => size.normal
+
+// --- Data Retrieval ---
+// Get the most recent closed HTF bar's high and low
+// Use current HTF bar but only store when confirmed closed
+htfHigh = request.security(syminfo.tickerid, i_htf, high, lookahead = barmerge.lookahead_off)
+htfLow = request.security(syminfo.tickerid, i_htf, low, lookahead = barmerge.lookahead_off)
+htfBarConfirmed = request.security(syminfo.tickerid, i_htf, barstate.isconfirmed, lookahead = barmerge.lookahead_off)
+
+// Store HTF values only when HTF bar is confirmed closed
+var float storedHTFHigh = na
+var float storedHTFLow = na
+var int lastHTFBarIndex = 0
+
+// Get HTF bar index to detect when new HTF bar forms
+htfBarIndex = request.security(syminfo.tickerid, i_htf, bar_index, lookahead = barmerge.lookahead_off)
+
+// Only update HTF values when HTF bar is confirmed closed and bar index changes
+if htfBarConfirmed and htfBarIndex != lastHTFBarIndex and not na(htfHigh) and not na(htfLow)
+    storedHTFHigh := htfHigh
+    storedHTFLow := htfLow
+    lastHTFBarIndex := htfBarIndex
+
+// Use stored values for all calculations to prevent moving lines
+htfHigh := storedHTFHigh
+htfLow := storedHTFLow
+
+// --- State Management ---
+// 0: Neutral, 1: Deviated Above, 2: Deviated Below, 3: Returned from Above, 4: Returned from Below
+var int state = 0
+
+// Break tracking variables
+var bool htfLastBreakWasAbove = false
+var bool htfLastBreakWasBelow = false
+
+// Retracement level variables (declare early to avoid undeclared identifier errors)
+var float bullishRetraceLevel = na
+var float bearishRetraceLevel = na
+var float bullish125Level = na
+var float bullish25Level = na
+var float bullish50Level = na
+var float bearish125Level = na
+var float bearish25Level = na
+var float bearish50Level = na
+
+// --- Calculations ---
+htfRange = htfHigh - htfLow
+retraceValue = htfRange * (i_retracePercent / 100.0)
+
+// Additional retracement levels
+retrace125Value = htfRange * 0.125
+retrace25Value = htfRange * 0.25
+retrace50Value = htfRange * 0.50
+
+// Determine retracement direction based on which HTF level was broken
+// If low was broken: retracement goes from low (0%) to high (100%)
+// If high was broken: retracement goes from high (0%) to low (100%)
+var bool lowWasBroken = false
+var bool highWasBroken = false
+
+// Detect breaks - use historical data to determine which was broken first
+// Check if low was broken in the current HTF range
+if not na(htfLow) and low < htfLow
+    lowWasBroken := true
+    highWasBroken := false
+// Check if high was broken in the current HTF range  
+if not na(htfHigh) and high > htfHigh
+    highWasBroken := true
+    lowWasBroken := false
+
+// Reset when new HTF bar forms
+if htfHigh != htfHigh[1] or htfLow != htfLow[1]
+    lowWasBroken := false
+    highWasBroken := false
+
+// Calculate retracement levels based on break direction
+if lowWasBroken
+    // Low was broken: retracement from low (0%) to high (100%)
+    bullishRetraceLevel := htfLow + retraceValue
+    bearishRetraceLevel := htfLow + retraceValue  // Same for both directions
+    
+    bullish125Level := htfLow + retrace125Value
+    bullish25Level := htfLow + retrace25Value
+    bullish50Level := htfLow + retrace50Value
+    bearish125Level := htfLow + retrace125Value
+    bearish25Level := htfLow + retrace25Value
+    bearish50Level := htfLow + retrace50Value
+else if highWasBroken
+    // High was broken: retracement from high (0%) to low (100%)
+    bullishRetraceLevel := htfHigh - retraceValue
+    bearishRetraceLevel := htfHigh - retraceValue  // Same for both directions
+    
+    bullish125Level := htfHigh - retrace125Value
+    bullish25Level := htfHigh - retrace25Value
+    bullish50Level := htfHigh - retrace50Value
+    bearish125Level := htfHigh - retrace125Value
+    bearish25Level := htfHigh - retrace25Value
+    bearish50Level := htfHigh - retrace50Value
+else
+    // No break yet, use default (high to low)
+    bullishRetraceLevel := htfHigh - retraceValue
+    bearishRetraceLevel := htfLow + retraceValue
+    
+    bullish125Level := htfHigh - retrace125Value
+    bullish25Level := htfHigh - retrace25Value
+    bullish50Level := htfHigh - retrace50Value
+    bearish125Level := htfLow + retrace125Value
+    bearish25Level := htfLow + retrace25Value
+    bearish50Level := htfLow + retrace50Value
+
+// --- Core Logic (State Machine) ---
+// When a new HTF bar forms, reset the state machine.
+if htfHigh != htfHigh[1] or htfLow != htfLow[1]
+    state := 0
+
+switch state
+    0 => // Neutral state: waiting for a deviation.
+        if high > htfHigh
+            state := 1 // Price deviated above.
+        else if low < htfLow
+            state := 2 // Price deviated below.
+    1 => // Deviated Above state: waiting for return to range.
+        if close < htfHigh
+            state := 3 // Price has returned.
+    2 => // Deviated Below state: waiting for return to range.
+        if close > htfLow
+            state := 4 // Price has returned.
+
+// --- Alert Conditions ---
+// A bullish setup occurs when, after breaking below HTF Low and returning, price is above the retracement level.
+bullishAlertCondition = state == 4 and close > bearishRetraceLevel
+// A bearish setup occurs when, after breaking above HTF High and returning, price is below the retracement level.
+bearishAlertCondition = state == 3 and close < bullishRetraceLevel
+
+// Once an alert is triggered, reset the state to prevent further alerts in the same session.
+if bullishAlertCondition or bearishAlertCondition
+    state := 0
+
+// --- Alerts ---
+alertMessageBullish = "LONG: Price broke below HTF Low " + str.tostring(htfLow, format.mintick) + ", retraced " + str.tostring(i_retracePercent) + "%"
+alertMessageBearish = "SHORT: Price broke above HTF High " + str.tostring(htfHigh, format.mintick) + ", retraced " + str.tostring(i_retracePercent) + "%"
+
+if bullishAlertCondition
+    alert(alertMessageBullish, alert.freq_once_per_bar)
+
+if bearishAlertCondition
+    alert(alertMessageBearish, alert.freq_once_per_bar)
+
+// --- Retracement Line Alerts ---
+// Alert conditions for each retracement level
+// Bullish: Price broke below HTF Low, returned, then hit retracement levels (LONG signals)
+alert125Bullish = i_enableRetracementAlerts and i_alertOn125Retrace and state == 4 and close > bearish125Level
+alert25Bullish = i_enableRetracementAlerts and i_alertOn25Retrace and state == 4 and close > bearish25Level
+alert50Bullish = i_enableRetracementAlerts and i_alertOn50Retrace and state == 4 and close > bearish50Level
+
+// Bearish: Price broke above HTF High, returned, then hit retracement levels (SHORT signals)
+alert125Bearish = i_enableRetracementAlerts and i_alertOn125Retrace and state == 3 and close < bullish125Level
+alert25Bearish = i_enableRetracementAlerts and i_alertOn25Retrace and state == 3 and close < bullish25Level
+alert50Bearish = i_enableRetracementAlerts and i_alertOn50Retrace and state == 3 and close < bullish50Level
+
+// Make retracement alerts visible in alert dialog by plotting them
+plotchar(alert125Bullish, "12.5% Bullish Alert", "▲", location.belowbar, color=color.blue, size=size.tiny)
+plotchar(alert25Bullish, "25% Bullish Alert", "▲", location.belowbar, color=color.purple, size=size.tiny)
+plotchar(alert50Bullish, "50% Bullish Alert", "▲", location.belowbar, color=color.green, size=size.tiny)
+plotchar(alert125Bearish, "12.5% Bearish Alert", "▼", location.abovebar, color=color.blue, size=size.tiny)
+plotchar(alert25Bearish, "25% Bearish Alert", "▼", location.abovebar, color=color.purple, size=size.tiny)
+plotchar(alert50Bearish, "50% Bearish Alert", "▼", location.abovebar, color=color.green, size=size.tiny)
+
+// Alert messages for retracement levels
+alertMessage125Bullish = "LONG: 12.5% Retracement Hit - Price crossed above " + str.tostring(bearish125Level, format.mintick)
+alertMessage125Bearish = "SHORT: 12.5% Retracement Hit - Price crossed below " + str.tostring(bullish125Level, format.mintick)
+alertMessage25Bullish = "LONG: 25% Retracement Hit - Price crossed above " + str.tostring(bearish25Level, format.mintick)
+alertMessage25Bearish = "SHORT: 25% Retracement Hit - Price crossed below " + str.tostring(bullish25Level, format.mintick)
+alertMessage50Bullish = "LONG: 50% Retracement Hit - Price crossed above " + str.tostring(bearish50Level, format.mintick)
+alertMessage50Bearish = "SHORT: 50% Retracement Hit - Price crossed below " + str.tostring(bullish50Level, format.mintick)
+
+// Execute retracement alerts
+if alert125Bullish
+    alert(alertMessage125Bullish, alert.freq_once_per_bar)
+if alert125Bearish
+    alert(alertMessage125Bearish, alert.freq_once_per_bar)
+if alert25Bullish
+    alert(alertMessage25Bullish, alert.freq_once_per_bar)
+if alert25Bearish
+    alert(alertMessage25Bearish, alert.freq_once_per_bar)
+if alert50Bullish
+    alert(alertMessage50Bullish, alert.freq_once_per_bar)
+if alert50Bearish
+    alert(alertMessage50Bearish, alert.freq_once_per_bar)
+
+// --- Visuals ---
+var box htfRangeBox = na
+
+// On the first bar of a new HTF session, draw a new box and delete the old one.
+if i_showBoxes and (htfHigh != htfHigh[1] or htfLow != htfLow[1])
+    if not na(htfRangeBox)
+        box.delete(htfRangeBox)
+    htfRangeBox := box.new(bar_index - 5, htfHigh, bar_index + 5, htfLow, color.new(i_boxColor, i_boxTransparency), border_width=1, border_style=line.style_dashed)
+else if not i_showBoxes and not na(htfRangeBox)
+    box.delete(htfRangeBox)
+    htfRangeBox := na
+
+// Plot retracement levels as circles only when they are being actively monitored.
+plot(state == 1 or state == 3 ? bullishRetraceLevel : na, "Bullish Retracement", color.new(color.green, 0), 2, plot.style_circles)
+plot(state == 2 or state == 4 ? bearishRetraceLevel : na, "Bearish Retracement", color.new(color.red, 0), 2, plot.style_circles)
+
+// Plot LONG/SHORT labels on the bar where the alert condition is met.
+plotshape(bullishAlertCondition, "Bullish Signal", shape.labelup, location.belowbar, color.new(color.green, 0), text="LONG", textcolor=color.white, size=size.small, offset=0)
+plotshape(bearishAlertCondition, "Bearish Signal", shape.labeldown, location.abovebar, color.new(color.red, 0), text="SHORT", textcolor=color.white, size=size.small, offset=0)
+
+// Debug information (commented out to clean up alert dialog)
+// plotchar(state, "State", "•", location.top, color=color.yellow, size=size.tiny)
+// plotchar(htfLastBreakWasAbove, "Break Above", "▲", location.top, color=color.green, size=size.tiny)
+// plotchar(htfLastBreakWasBelow, "Break Below", "▼", location.top, color=color.red, size=size.tiny)
+// plotchar(htfHigh, "HTF High", "H", location.top, color=color.blue, size=size.tiny)
+// plotchar(htfLow, "HTF Low", "L", location.top, color=color.orange, size=size.tiny)
+// plotchar(lowWasBroken, "Low Broken", "↓", location.top, color=color.red, size=size.tiny)
+// plotchar(highWasBroken, "High Broken", "↑", location.top, color=color.green, size=size.tiny)
+// plotchar(htfBarIndex, "HTF Bar Index", "I", location.top, color=color.purple, size=size.tiny)
+
+// Debug labels to show actual values (toggleable)
+if i_showDebugLabel and barstate.islast
+    label.new(bar_index, high, "HTF High: " + str.tostring(htfHigh) + "\nHTF Low: " + str.tostring(htfLow) + "\nHTF Bar Index: " + str.tostring(htfBarIndex) + "\nHTF Confirmed: " + str.tostring(htfBarConfirmed) + "\nLow Broken: " + str.tostring(lowWasBroken) + "\nHigh Broken: " + str.tostring(highWasBroken), style=label.style_label_down, color=color.yellow, textcolor=color.black, size=size.normal)
+
+// HTF Range Lines - Horizontal lines showing previous closed HTF candle range
+var line htfHighLine = na
+var line htfLowLine = na
+var label htfHighLabel = na
+var label htfLowLabel = na
+
+// Retracement lines variables
+var line bullish125Line = na
+var line bearish125Line = na
+var label bullish125Label = na
+var label bearish125Label = na
+var line bullish25Line = na
+var line bearish25Line = na
+var label bullish25Label = na
+var label bearish25Label = na
+var line bullish50Line = na
+var line bearish50Line = na
+var label bullish50Label = na
+var label bearish50Label = na
+
+// When a new HTF bar forms, update the horizontal lines
+if i_showHTFLines and (htfHigh != htfHigh[1] or htfLow != htfLow[1])
+    // Delete old lines and labels
+    if not na(htfHighLine)
+        line.delete(htfHighLine)
+    if not na(htfLowLine)
+        line.delete(htfLowLine)
+    if not na(htfHighLabel)
+        label.delete(htfHighLabel)
+    if not na(htfLowLabel)
+        label.delete(htfLowLabel)
+    
+    // Delete old retracement lines and labels
+    if not na(bullish125Line)
+        line.delete(bullish125Line)
+    if not na(bearish125Line)
+        line.delete(bearish125Line)
+    if not na(bullish125Label)
+        label.delete(bullish125Label)
+    if not na(bearish125Label)
+        label.delete(bearish125Label)
+    if not na(bullish25Line)
+        line.delete(bullish25Line)
+    if not na(bearish25Line)
+        line.delete(bearish25Line)
+    if not na(bullish25Label)
+        label.delete(bullish25Label)
+    if not na(bearish25Label)
+        label.delete(bearish25Label)
+    if not na(bullish50Line)
+        line.delete(bullish50Line)
+    if not na(bearish50Line)
+        line.delete(bearish50Line)
+    if not na(bullish50Label)
+        label.delete(bullish50Label)
+    if not na(bearish50Label)
+        label.delete(bearish50Label)
+    
+    // Create new horizontal lines for the previous closed HTF candle
+    int startBar = bar_index - 1  // Start from previous bar
+    int endBar = startBar + i_lineLength  // Extend for specified number of bars
+    
+    htfHighLine := line.new(startBar, htfHigh, endBar, htfHigh, color=color.new(i_htfHighColor, 30), width=1, style=line.style_solid)
+    htfLowLine := line.new(startBar, htfLow, endBar, htfLow, color=color.new(i_htfLowColor, 30), width=1, style=line.style_solid)
+    
+    // Add labels to the lines
+    string htfHighText = "HTF High: " + str.tostring(htfHigh, format.mintick)
+    string htfLowText = "HTF Low: " + str.tostring(htfLow, format.mintick)
+    
+    htfHighLabel := label.new(startBar + i_labelOffset, htfHigh, text=htfHighText, style=label.style_label_left, color=color.new(i_htfHighColor, 80), textcolor=i_htfHighColor, size=getFontSize())
+    htfLowLabel := label.new(startBar + i_labelOffset, htfLow, text=htfLowText, style=label.style_label_left, color=color.new(i_htfLowColor, 80), textcolor=i_htfLowColor, size=getFontSize())
+    
+    // Create retracement lines when HTF lines are created
+    if i_showRetracementLines
+        // 12.5% retracement lines
+        if i_show125Retrace
+            bullish125Line := line.new(startBar, bullish125Level, endBar, bullish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish125Label := label.new(startBar + i_labelOffset, bullish125Level, text="12.5% Retrace: " + str.tostring(bullish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
+        
+        // 25% retracement lines
+        if i_show25Retrace
+            bullish25Line := line.new(startBar, bullish25Level, endBar, bullish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish25Label := label.new(startBar + i_labelOffset, bullish25Level, text="25% Retrace: " + str.tostring(bullish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
+        
+        // 50% retracement lines
+        if i_show50Retrace
+            bullish50Line := line.new(startBar, bullish50Level, endBar, bullish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish50Label := label.new(startBar + i_labelOffset, bullish50Level, text="50% Retrace: " + str.tostring(bullish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+
+// Create retracement lines on every bar when state conditions are met (for lower timeframes)
+// Use HTF-based conditions to ensure lines appear on all timeframes
+// Track the most recent break direction to determine retracement direction
+
+// Detect new breaks
+htfBreakingAbove = high > htfHigh and not htfLastBreakWasAbove
+htfBreakingBelow = low < htfLow and not htfLastBreakWasBelow
+
+// Update break tracking
+if htfBreakingAbove
+    htfLastBreakWasAbove := true
+    htfLastBreakWasBelow := false
+else if htfBreakingBelow
+    htfLastBreakWasBelow := true
+    htfLastBreakWasAbove := false
+
+// Reset when new HTF bar forms
+if htfHigh != htfHigh[1] or htfLow != htfLow[1]
+    htfLastBreakWasAbove := false
+    htfLastBreakWasBelow := false
+
+// Determine which retracement lines to show - simplified logic
+htfShowBullishRetracement = htfLastBreakWasAbove
+htfShowBearishRetracement = htfLastBreakWasBelow
+
+if i_showRetracementLines and (htfShowBullishRetracement or htfShowBearishRetracement)
+    // Clean up old retracement lines first
+    if not na(bullish125Line)
+        line.delete(bullish125Line)
+    if not na(bearish125Line)
+        line.delete(bearish125Line)
+    if not na(bullish125Label)
+        label.delete(bullish125Label)
+    if not na(bearish125Label)
+        label.delete(bearish125Label)
+    if not na(bullish25Line)
+        line.delete(bullish25Line)
+    if not na(bearish25Line)
+        line.delete(bearish25Line)
+    if not na(bullish25Label)
+        label.delete(bullish25Label)
+    if not na(bearish25Label)
+        label.delete(bearish25Label)
+    if not na(bullish50Line)
+        line.delete(bullish50Line)
+    if not na(bearish50Line)
+        line.delete(bearish50Line)
+    if not na(bullish50Label)
+        label.delete(bullish50Label)
+    if not na(bearish50Label)
+        label.delete(bearish50Label)
+    
+    // Create new retracement lines aligned with HTF lines
+    int currentStartBar = bar_index - 1  // Start from previous bar to align with HTF lines
+    int currentEndBar = currentStartBar + i_lineLength
+    
+    // Price broke ABOVE HTF High - show downward retracement lines from high
+    if htfShowBullishRetracement
+        // 12.5% retracement lines (downward from high)
+        if i_show125Retrace
+            bullish125Line := line.new(currentStartBar, bullish125Level, currentEndBar, bullish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish125Label := label.new(currentStartBar + i_labelOffset, bullish125Level, text="12.5% Retrace: " + str.tostring(bullish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
+        
+        // 25% retracement lines (downward from high)
+        if i_show25Retrace
+            bullish25Line := line.new(currentStartBar, bullish25Level, currentEndBar, bullish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish25Label := label.new(currentStartBar + i_labelOffset, bullish25Level, text="25% Retrace: " + str.tostring(bullish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
+        
+        // 50% retracement lines (downward from high)
+        if i_show50Retrace
+            bullish50Line := line.new(currentStartBar, bullish50Level, currentEndBar, bullish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish50Label := label.new(currentStartBar + i_labelOffset, bullish50Level, text="50% Retrace: " + str.tostring(bullish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+    
+    // Price broke BELOW HTF Low - show upward retracement lines from low
+    else if htfShowBearishRetracement
+        // 12.5% retracement lines (upward from low)
+        if i_show125Retrace
+            bearish125Line := line.new(currentStartBar, bearish125Level, currentEndBar, bearish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
+            bearish125Label := label.new(currentStartBar + i_labelOffset, bearish125Level, text="12.5% Retrace: " + str.tostring(bearish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
+        
+        // 25% retracement lines (upward from low)
+        if i_show25Retrace
+            bearish25Line := line.new(currentStartBar, bearish25Level, currentEndBar, bearish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
+            bearish25Label := label.new(currentStartBar + i_labelOffset, bearish25Level, text="25% Retrace: " + str.tostring(bearish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
+        
+        // 50% retracement lines (upward from low)
+        if i_show50Retrace
+            bearish50Line := line.new(currentStartBar, bearish50Level, currentEndBar, bearish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
+            bearish50Label := label.new(currentStartBar + i_labelOffset, bearish50Level, text="50% Retrace: " + str.tostring(bearish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+
+else if not i_showHTFLines
+    // Clean up lines and labels when disabled
+    if not na(htfHighLine)
+        line.delete(htfHighLine)
+        htfHighLine := na
+    if not na(htfLowLine)
+        line.delete(htfLowLine)
+        htfLowLine := na
+    if not na(htfHighLabel)
+        label.delete(htfHighLabel)
+        htfHighLabel := na
+    if not na(htfLowLabel)
+        label.delete(htfLowLabel)
+        htfLowLabel := na
+    
+    // Clean up retracement lines and labels when disabled
+    if not na(bullish125Line)
+        line.delete(bullish125Line)
+        bullish125Line := na
+    if not na(bearish125Line)
+        line.delete(bearish125Line)
+        bearish125Line := na
+    if not na(bullish125Label)
+        label.delete(bullish125Label)
+        bullish125Label := na
+    if not na(bearish125Label)
+        label.delete(bearish125Label)
+        bearish125Label := na
+    if not na(bullish25Line)
+        line.delete(bullish25Line)
+        bullish25Line := na
+    if not na(bearish25Line)
+        line.delete(bearish25Line)
+        bearish25Line := na
+    if not na(bullish25Label)
+        label.delete(bullish25Label)
+        bullish25Label := na
+    if not na(bearish25Label)
+        label.delete(bearish25Label)
+        bearish25Label := na
+    if not na(bullish50Line)
+        line.delete(bullish50Line)
+        bullish50Line := na
+    if not na(bearish50Line)
+        line.delete(bearish50Line)
+        bearish50Line := na
+    if not na(bullish50Label)
+        label.delete(bullish50Label)
+        bullish50Label := na
+    if not na(bearish50Label)
+        label.delete(bearish50Label)
+        bearish50Label := na
