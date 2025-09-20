@@ -1,7 +1,7 @@
 ﻿//  Gemini
 //@version=6
 // HTF = Higher Timeframe, D&R = Deviation & Retracement
-indicator("HTF Deviation & Retracement", "HTF D&R", overlay = true)
+indicator("Pattern Pulse Deviation & Retracement v1", "PPDR v1", overlay = true)
 
 // --- User Inputs ---
 // Reformatting inputs to be multi-line for compiler stability and readability.
