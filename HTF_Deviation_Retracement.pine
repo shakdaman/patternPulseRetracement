@@ -1,7 +1,7 @@
 ﻿//  Gemini
 //@version=6
 // HTF = Higher Timeframe, D&R = Deviation & Retracement
-indicator("Pattern Pulse Deviation & Retracement v1", "PPDR v1", overlay = true)
+indicator("HTF Deviation & Retracement", "HTF D&R", overlay = true)
 
 // --- User Inputs ---
 // Reformatting inputs to be multi-line for compiler stability and readability.
@@ -31,12 +31,23 @@ i_labelOffset = input.int(2, "Label Offset (bars)", 1, 10)
 
 // Debug Controls
 i_showDebugLabel = input.bool(false, "Show Debug Information")
+i_showPnLLabels = input.bool(true, "Show P&L Labels")
 
-// Retracement Alert Controls
-i_enableRetracementAlerts = input.bool(true, "Enable Retracement Line Alerts")
-i_alertOn125Retrace = input.bool(true, "Alert on 12.5% Retracement")
-i_alertOn25Retrace = input.bool(true, "Alert on 25% Retracement")
-i_alertOn50Retrace = input.bool(true, "Alert on 50% Retracement")
+// Retracement Level Plot Controls (for TradingView crossing alerts)
+i_showRetracementLevels = input.bool(true, "Show Retracement Level Plots")
+
+// Position Tracking Controls
+i_showPositionZones = input.bool(true, "Show Position Zones")
+i_showProfitZone = input.bool(true, "Show Profit Zone")
+i_showStopLossZone = input.bool(true, "Show Stop Loss Zone")
+
+// Profit Zone Styling
+i_profitZoneColor = input.color(color.green, "Profit Zone Color")
+i_profitZoneTransparency = input.int(85, "Profit Zone Transparency", 0, 95)
+
+// Stop Loss Zone Styling
+i_stopLossZoneColor = input.color(color.red, "Stop Loss Zone Color")
+i_stopLossZoneTransparency = input.int(85, "Stop Loss Zone Transparency", 0, 95)
 
 // Font size conversion function
 getFontSize() =>
@@ -72,8 +83,12 @@ if htfBarConfirmed and htfBarIndex != lastHTFBarIndex and not na(htfHigh) and no
 htfHigh := storedHTFHigh
 htfLow := storedHTFLow
 
-// --- State Management ---
+// --- Enhanced State Management ---
 // 0: Neutral, 1: Deviated Above, 2: Deviated Below, 3: Returned from Above, 4: Returned from Below
+// 5: Bullish Above 25%, 6: Bullish Above 50%, 7: Bullish Above 100% (HTF High)
+// 8: Bullish Fell Below 50%, 9: Bullish Fell Below 25%
+// 10: Bearish Below 25%, 11: Bearish Below 50%, 12: Bearish Below 100% (HTF Low)  
+// 13: Bearish Rose Above 50%, 14: Bearish Rose Above 25%
 var int state = 0
 
 // Break tracking variables
@@ -89,6 +104,38 @@ var float bullish50Level = na
 var float bearish125Level = na
 var float bearish25Level = na
 var float bearish50Level = na
+
+// Position tracking variables
+var bool hasActivePosition = false
+var string positionType = ""  // "LONG" or "SHORT"
+var float entryPrice = na
+var int entryBarIndex = na
+var float currentPnL = 0.0
+var float currentPnLPercent = 0.0
+var float riskAmount = 0.0
+var float rewardAmount = 0.0
+var float rrRatio = 0.0
+var bool positionHitTarget = false
+var bool positionHitStop = false
+
+// Signal tracking variables to prevent duplicate signals
+var bool signal25Bullish = false
+var bool signal50Bullish = false
+var bool signal100Bullish = false
+var bool signal25Bearish = false
+var bool signal50Bearish = false
+var bool signal100Bearish = false
+
+// Temporary signal flags that reset each bar
+signal25Bullish := false
+signal50Bullish := false
+signal100Bullish := false
+signal25Bearish := false
+signal50Bearish := false
+signal100Bearish := false
+
+// Store previous state to detect transitions
+var int prevState = 0
 
 // --- Calculations ---
 htfRange = htfHigh - htfLow
@@ -156,10 +203,18 @@ else
     bearish50Level := htfLow + retrace50Value
 
 // --- Core Logic (State Machine) ---
-// When a new HTF bar forms, reset the state machine.
+// When a new HTF bar forms, reset the state machine and signal flags.
 if htfHigh != htfHigh[1] or htfLow != htfLow[1]
     state := 0
+    // Reset signal flags for new HTF cycle
+    signal25Bullish := false
+    signal50Bullish := false
+    signal100Bullish := false
+    signal25Bearish := false
+    signal50Bearish := false
+    signal100Bearish := false
 
+// Enhanced State Machine with Full Retracement Tracking
 switch state
     0 => // Neutral state: waiting for a deviation.
         if high > htfHigh
@@ -172,68 +227,202 @@ switch state
     2 => // Deviated Below state: waiting for return to range.
         if close > htfLow
             state := 4 // Price has returned.
+    3 => // Returned from Above: now track bearish retracements
+        if close < bearish25Level
+            state := 10 // Bearish - Below 25% Retrace
+        else if close > htfHigh
+            state := 1 // Back to deviated above
+    4 => // Returned from Below: now track bullish retracements  
+        if close > bullish25Level
+            state := 5 // Bullish - Above 25% Retrace
+        else if close < htfLow
+            state := 2 // Back to deviated below
+    5 => // Bullish Above 25%: track progression or retracement
+        if close > bullish50Level
+            state := 6 // Bullish - Above 50% Retrace
+        else if close < bullish25Level
+            state := 9 // Bullish - Fell Below 25% (retracement)
+    6 => // Bullish Above 50%: track progression or retracement
+        if close > htfHigh
+            state := 7 // Bullish - Above 100% (HTF High broken)
+        else if close < bullish50Level
+            state := 8 // Bullish - Fell Below 50% (retracement)
+    7 => // Bullish Above 100% (HTF High): track continuation or false break
+        if close < htfHigh
+            state := 1 // False break - back to deviated above
+        // If continues above HTF High, stay in state 7 or reset to 0 for new cycle
+    8 => // Bullish Fell Below 50%: track recovery or deeper retracement
+        if close > bullish50Level
+            state := 6 // Recovery - back above 50%
+        else if close < bullish25Level
+            state := 9 // Deeper retracement - below 25%
+    9 => // Bullish Fell Below 25%: track recovery
+        if close > bullish25Level
+            state := 5 // Recovery - back above 25%
+        else if close < htfLow
+            state := 2 // Back to deviated below
+    10 => // Bearish Below 25%: track progression or retracement
+        if close < bearish50Level
+            state := 11 // Bearish - Below 50% Retrace
+        else if close > bearish25Level
+            state := 14 // Bearish - Rose Above 25% (retracement)
+    11 => // Bearish Below 50%: track progression or retracement
+        if close < htfLow
+            state := 12 // Bearish - Below 100% (HTF Low broken)
+        else if close > bearish50Level
+            state := 13 // Bearish - Rose Above 50% (retracement)
+    12 => // Bearish Below 100% (HTF Low): track continuation or false break
+        if close > htfLow
+            state := 2 // False break - back to deviated below
+        // If continues below HTF Low, stay in state 12 or reset to 0 for new cycle
+    13 => // Bearish Rose Above 50%: track recovery or deeper retracement
+        if close < bearish50Level
+            state := 11 // Recovery - back below 50%
+        else if close > bearish25Level
+            state := 14 // Deeper retracement - above 25%
+    14 => // Bearish Rose Above 25%: track recovery
+        if close < bearish25Level
+            state := 10 // Recovery - back below 25%
+        else if close > htfHigh
+            state := 1 // Back to deviated above
 
-// --- Alert Conditions ---
-// A bullish setup occurs when, after breaking below HTF Low and returning, price is above the retracement level.
-bullishAlertCondition = state == 4 and close > bearishRetraceLevel
-// A bearish setup occurs when, after breaking above HTF High and returning, price is below the retracement level.
-bearishAlertCondition = state == 3 and close < bullishRetraceLevel
+// Set signals only on state transitions (first bar of each state)
+if state != prevState
+    if state == 5
+        signal25Bullish := true
+    else if state == 6
+        signal50Bullish := true
+    else if state == 7
+        signal100Bullish := true
+    else if state == 10
+        signal25Bearish := true
+    else if state == 11
+        signal50Bearish := true
+    else if state == 12
+        signal100Bearish := true
 
-// Once an alert is triggered, reset the state to prevent further alerts in the same session.
-if bullishAlertCondition or bearishAlertCondition
-    state := 0
+// Update previous state
+prevState := state
+
+// --- Enhanced Alert Conditions ---
+// Bullish signals: States 5, 6, 7 (progression) and recovery from retracements
+bullishAlertCondition = state == 5 or state == 6 or state == 7 or (state == 8 and close > bullish50Level) or (state == 9 and close > bullish25Level)
+// Bearish signals: States 10, 11, 12 (progression) and recovery from retracements  
+bearishAlertCondition = state == 10 or state == 11 or state == 12 or (state == 13 and close < bearish50Level) or (state == 14 and close < bearish25Level)
+
+// Dynamic Position Tracking - Only enter on first candle when hitting retracement level
+if (signal25Bullish or signal50Bullish or signal100Bullish) and not hasActivePosition
+    // Open LONG position on first hit of any bullish retracement level
+    hasActivePosition := true
+    positionType := "LONG"
+    entryPrice := bullishRetraceLevel  // Use retracement level as entry price
+    entryBarIndex := bar_index
+    positionHitTarget := false
+    positionHitStop := false
+    
+if (signal25Bearish or signal50Bearish or signal100Bearish) and not hasActivePosition
+    // Open SHORT position on first hit of any bearish retracement level
+    hasActivePosition := true
+    positionType := "SHORT"
+    entryPrice := bearishRetraceLevel  // Use retracement level as entry price
+    entryBarIndex := bar_index
+    positionHitTarget := false
+    positionHitStop := false
+
+// Enhanced Signal Shapes - Only show on first candle when hitting retracement level
+plotshape(signal25Bullish, "Bullish 25%", shape.labelup, location.belowbar, color.new(color.lime, 0), text="LONG 25%", textcolor=color.white, size=size.small, offset=0)
+plotshape(signal50Bullish, "Bullish 50%", shape.labelup, location.belowbar, color.new(color.green, 0), text="LONG 50%", textcolor=color.white, size=size.small, offset=0)
+plotshape(signal100Bullish, "Bullish 100%", shape.labelup, location.belowbar, color.new(color.aqua, 0), text="LONG 100%", textcolor=color.white, size=size.normal, offset=0)
+plotshape(signal25Bearish, "Bearish 25%", shape.labeldown, location.abovebar, color.new(color.orange, 0), text="SHORT 25%", textcolor=color.white, size=size.small, offset=0)
+plotshape(signal50Bearish, "Bearish 50%", shape.labeldown, location.abovebar, color.new(color.red, 0), text="SHORT 50%", textcolor=color.white, size=size.small, offset=0)
+plotshape(signal100Bearish, "Bearish 100%", shape.labeldown, location.abovebar, color.new(color.purple, 0), text="SHORT 100%", textcolor=color.white, size=size.normal, offset=0)
+
+// Calculate current P&L and R:R ratio if position is active
+if hasActivePosition
+    if positionType == "LONG"
+        currentPnL := close - entryPrice
+        currentPnLPercent := (currentPnL / entryPrice) * 100
+        // Calculate R:R ratio
+        riskAmount := entryPrice - bullish125Level  // Distance to stop loss
+        rewardAmount := htfHigh - entryPrice        // Distance to profit target
+        rrRatio := riskAmount > 0 ? rewardAmount / riskAmount : 0
+        // Check for profit target hit (HTF High reached)
+        if close >= htfHigh and not positionHitTarget
+            positionHitTarget := true
+        // Check for stop loss hit (12.5% retracement level reached)
+        if close <= bullish125Level and not positionHitStop
+            positionHitStop := true
+    else if positionType == "SHORT"
+        currentPnL := entryPrice - close
+        currentPnLPercent := (currentPnL / entryPrice) * 100
+        // Calculate R:R ratio
+        riskAmount := bearish125Level - entryPrice  // Distance to stop loss
+        rewardAmount := entryPrice - htfLow         // Distance to profit target
+        rrRatio := riskAmount > 0 ? rewardAmount / riskAmount : 0
+        // Check for profit target hit (HTF Low reached)
+        if close <= htfLow and not positionHitTarget
+            positionHitTarget := true
+        // Check for stop loss hit (12.5% retracement level reached)
+        if close >= bearish125Level and not positionHitStop
+            positionHitStop := true
+
+// Enhanced position close conditions based on state changes
+if hasActivePosition
+    // Close LONG positions on bearish state changes or target/stop hit
+    if positionType == "LONG" and (positionHitTarget or positionHitStop or state == 0 or state == 1 or state == 2 or state == 3 or state == 10 or state == 11 or state == 12 or state == 13 or state == 14)
+        hasActivePosition := false
+        positionType := ""
+        entryPrice := na
+        entryBarIndex := na
+        currentPnL := 0.0
+        currentPnLPercent := 0.0
+        positionHitTarget := false
+        positionHitStop := false
+    // Close SHORT positions on bullish state changes or target/stop hit
+    else if positionType == "SHORT" and (positionHitTarget or positionHitStop or state == 0 or state == 1 or state == 2 or state == 4 or state == 5 or state == 6 or state == 7 or state == 8 or state == 9)
+        hasActivePosition := false
+        positionType := ""
+        entryPrice := na
+        entryBarIndex := na
+        currentPnL := 0.0
+        currentPnLPercent := 0.0
+        positionHitTarget := false
+        positionHitStop := false
+
+// Note: State transitions are now handled by the enhanced state machine above
+// No need to reset state to 0 on alerts - let the state machine track the full progression
 
 // --- Alerts ---
-alertMessageBullish = "LONG: Price broke below HTF Low " + str.tostring(htfLow, format.mintick) + ", retraced " + str.tostring(i_retracePercent) + "%"
-alertMessageBearish = "SHORT: Price broke above HTF High " + str.tostring(htfHigh, format.mintick) + ", retraced " + str.tostring(i_retracePercent) + "%"
+// Enhanced alert messages for different signal types
+alertMessage25Bullish = "LONG 25%: Price hit 25% retracement level at " + str.tostring(bullish25Level, format.mintick)
+alertMessage50Bullish = "LONG 50%: Price hit 50% retracement level at " + str.tostring(bullish50Level, format.mintick)
+alertMessage100Bullish = "LONG 100%: Price hit HTF High at " + str.tostring(htfHigh, format.mintick)
+alertMessage25Bearish = "SHORT 25%: Price hit 25% retracement level at " + str.tostring(bearish25Level, format.mintick)
+alertMessage50Bearish = "SHORT 50%: Price hit 50% retracement level at " + str.tostring(bearish50Level, format.mintick)
+alertMessage100Bearish = "SHORT 100%: Price hit HTF Low at " + str.tostring(htfLow, format.mintick)
 
-if bullishAlertCondition
-    alert(alertMessageBullish, alert.freq_once_per_bar)
-
-if bearishAlertCondition
-    alert(alertMessageBearish, alert.freq_once_per_bar)
-
-// --- Retracement Line Alerts ---
-// Alert conditions for each retracement level
-// Bullish: Price broke below HTF Low, returned, then hit retracement levels (LONG signals)
-alert125Bullish = i_enableRetracementAlerts and i_alertOn125Retrace and state == 4 and close > bearish125Level
-alert25Bullish = i_enableRetracementAlerts and i_alertOn25Retrace and state == 4 and close > bearish25Level
-alert50Bullish = i_enableRetracementAlerts and i_alertOn50Retrace and state == 4 and close > bearish50Level
-
-// Bearish: Price broke above HTF High, returned, then hit retracement levels (SHORT signals)
-alert125Bearish = i_enableRetracementAlerts and i_alertOn125Retrace and state == 3 and close < bullish125Level
-alert25Bearish = i_enableRetracementAlerts and i_alertOn25Retrace and state == 3 and close < bullish25Level
-alert50Bearish = i_enableRetracementAlerts and i_alertOn50Retrace and state == 3 and close < bullish50Level
-
-// Make retracement alerts visible in alert dialog by plotting them
-plotchar(alert125Bullish, "12.5% Bullish Alert", "▲", location.belowbar, color=color.blue, size=size.tiny)
-plotchar(alert25Bullish, "25% Bullish Alert", "▲", location.belowbar, color=color.purple, size=size.tiny)
-plotchar(alert50Bullish, "50% Bullish Alert", "▲", location.belowbar, color=color.green, size=size.tiny)
-plotchar(alert125Bearish, "12.5% Bearish Alert", "▼", location.abovebar, color=color.blue, size=size.tiny)
-plotchar(alert25Bearish, "25% Bearish Alert", "▼", location.abovebar, color=color.purple, size=size.tiny)
-plotchar(alert50Bearish, "50% Bearish Alert", "▼", location.abovebar, color=color.green, size=size.tiny)
-
-// Alert messages for retracement levels
-alertMessage125Bullish = "LONG: 12.5% Retracement Hit - Price crossed above " + str.tostring(bearish125Level, format.mintick)
-alertMessage125Bearish = "SHORT: 12.5% Retracement Hit - Price crossed below " + str.tostring(bullish125Level, format.mintick)
-alertMessage25Bullish = "LONG: 25% Retracement Hit - Price crossed above " + str.tostring(bearish25Level, format.mintick)
-alertMessage25Bearish = "SHORT: 25% Retracement Hit - Price crossed below " + str.tostring(bullish25Level, format.mintick)
-alertMessage50Bullish = "LONG: 50% Retracement Hit - Price crossed above " + str.tostring(bearish50Level, format.mintick)
-alertMessage50Bearish = "SHORT: 50% Retracement Hit - Price crossed below " + str.tostring(bullish50Level, format.mintick)
-
-// Execute retracement alerts
-if alert125Bullish
-    alert(alertMessage125Bullish, alert.freq_once_per_bar)
-if alert125Bearish
-    alert(alertMessage125Bearish, alert.freq_once_per_bar)
-if alert25Bullish
+// Signal-specific alerts with detailed messages
+if signal25Bullish
     alert(alertMessage25Bullish, alert.freq_once_per_bar)
-if alert25Bearish
-    alert(alertMessage25Bearish, alert.freq_once_per_bar)
-if alert50Bullish
+if signal50Bullish
     alert(alertMessage50Bullish, alert.freq_once_per_bar)
-if alert50Bearish
+if signal100Bullish
+    alert(alertMessage100Bullish, alert.freq_once_per_bar)
+if signal25Bearish
+    alert(alertMessage25Bearish, alert.freq_once_per_bar)
+if signal50Bearish
     alert(alertMessage50Bearish, alert.freq_once_per_bar)
+if signal100Bearish
+    alert(alertMessage100Bearish, alert.freq_once_per_bar)
+
+// --- Retracement Level Plots (for TradingView crossing alerts) ---
+// These create plots that TradingView can use for "crossing" alerts with direction control
+plot(i_showRetracementLevels ? bullish125Level : na, "12.5% Retracement", color.new(color.red, 0), 2, plot.style_line)
+plot(i_showRetracementLevels ? bullish25Level : na, "25% Retracement", color.new(color.purple, 0), 2, plot.style_line)
+plot(i_showRetracementLevels ? bullish50Level : na, "50% Retracement", color.new(color.green, 0), 2, plot.style_line)
+
+// Note: Old retracement alert logic removed - now using TradingView crossing alerts with retracement level plots
+
 
 // --- Visuals ---
 var box htfRangeBox = na
@@ -251,9 +440,7 @@ else if not i_showBoxes and not na(htfRangeBox)
 plot(state == 1 or state == 3 ? bullishRetraceLevel : na, "Bullish Retracement", color.new(color.green, 0), 2, plot.style_circles)
 plot(state == 2 or state == 4 ? bearishRetraceLevel : na, "Bearish Retracement", color.new(color.red, 0), 2, plot.style_circles)
 
-// Plot LONG/SHORT labels on the bar where the alert condition is met.
-plotshape(bullishAlertCondition, "Bullish Signal", shape.labelup, location.belowbar, color.new(color.green, 0), text="LONG", textcolor=color.white, size=size.small, offset=0)
-plotshape(bearishAlertCondition, "Bearish Signal", shape.labeldown, location.abovebar, color.new(color.red, 0), text="SHORT", textcolor=color.white, size=size.small, offset=0)
+// Note: Old alert condition plotshapes removed - now using state-specific signals above
 
 // Debug information (commented out to clean up alert dialog)
 // plotchar(state, "State", "•", location.top, color=color.yellow, size=size.tiny)
@@ -265,9 +452,30 @@ plotshape(bearishAlertCondition, "Bearish Signal", shape.labeldown, location.abo
 // plotchar(highWasBroken, "High Broken", "↑", location.top, color=color.green, size=size.tiny)
 // plotchar(htfBarIndex, "HTF Bar Index", "I", location.top, color=color.purple, size=size.tiny)
 
-// Debug labels to show actual values (toggleable)
+// Function to get state description
+f_getStateDescription(state) =>
+    switch state
+        0 => "Neutral - Waiting for deviation"
+        1 => "Deviated Above - Price broke above HTF High"
+        2 => "Deviated Below - Price broke below HTF Low"
+        3 => "Returned from Above - Price returned to range from above"
+        4 => "Returned from Below - Price returned to range from below"
+        5 => "Bullish Above 25% - Initial bullish signal"
+        6 => "Bullish Above 50% - Strong bullish signal"
+        7 => "Bullish Above 100% - HTF High broken (maximum bullish)"
+        8 => "Bullish Fell Below 50% - Retracement warning"
+        9 => "Bullish Fell Below 25% - Deeper retracement"
+        10 => "Bearish Below 25% - Initial bearish signal"
+        11 => "Bearish Below 50% - Strong bearish signal"
+        12 => "Bearish Below 100% - HTF Low broken (maximum bearish)"
+        13 => "Bearish Rose Above 50% - Retracement warning"
+        14 => "Bearish Rose Above 25% - Deeper retracement"
+        => "Unknown State"
+
+// Debug labels to show actual values (toggleable) - positioned on left side
 if i_showDebugLabel and barstate.islast
-    label.new(bar_index, high, "HTF High: " + str.tostring(htfHigh) + "\nHTF Low: " + str.tostring(htfLow) + "\nHTF Bar Index: " + str.tostring(htfBarIndex) + "\nHTF Confirmed: " + str.tostring(htfBarConfirmed) + "\nLow Broken: " + str.tostring(lowWasBroken) + "\nHigh Broken: " + str.tostring(highWasBroken), style=label.style_label_down, color=color.yellow, textcolor=color.black, size=size.normal)
+    string debugText = "HTF High: " + str.tostring(htfHigh) + "\nHTF Low: " + str.tostring(htfLow) + "\nHTF Bar Index: " + str.tostring(htfBarIndex) + "\nHTF Confirmed: " + str.tostring(htfBarConfirmed) + "\nLow Broken: " + str.tostring(lowWasBroken) + "\nHigh Broken: " + str.tostring(highWasBroken) + "\nState: " + str.tostring(state) + " - " + f_getStateDescription(state) + "\nHas Position: " + str.tostring(hasActivePosition) + "\nPosition Type: " + positionType + "\n--- BOX VISIBILITY SETTINGS ---\nHTF Range Box: " + str.tostring(i_showBoxes) + "\nPosition Zones: " + str.tostring(i_showPositionZones) + "\nProfit Zone: " + str.tostring(i_showProfitZone) + "\nStop Loss Zone: " + str.tostring(i_showStopLossZone)
+    label.new(bar_index, high, debugText, style=label.style_label_left, color=color.yellow, textcolor=color.black, size=size.normal)
 
 // HTF Range Lines - Horizontal lines showing previous closed HTF candle range
 var line htfHighLine = na
@@ -500,3 +708,99 @@ else if not i_showHTFLines
     if not na(bearish50Label)
         label.delete(bearish50Label)
         bearish50Label := na
+
+// --- Position Tracking Visuals ---
+// Position zone boxes
+var box profitZone = na
+var box stopLossZone = na
+var label pnlLabel = na
+
+// Calculate position zones when position is active
+if hasActivePosition and i_showPositionZones
+    float profitZoneTop = na
+    float profitZoneBottom = na
+    float stopZoneTop = na
+    float stopZoneBottom = na
+    
+    if positionType == "LONG"
+        // For LONG positions:
+        // Profit zone: from user-defined retracement level up to HTF High
+        profitZoneBottom := bullishRetraceLevel
+        profitZoneTop := htfHigh
+        // Stop zone: from user-defined retracement level down to 12.5% retracement level
+        stopZoneTop := bullishRetraceLevel
+        stopZoneBottom := bullish125Level
+    else if positionType == "SHORT"
+        // For SHORT positions:
+        // Profit zone: from user-defined retracement level down to HTF Low
+        profitZoneTop := bearishRetraceLevel
+        profitZoneBottom := htfLow
+        // Stop zone: from user-defined retracement level up to 12.5% retracement level
+        stopZoneBottom := bearishRetraceLevel
+        stopZoneTop := bearish125Level
+    
+    // Delete old zones
+    if not na(profitZone)
+        box.delete(profitZone)
+    if not na(stopLossZone)
+        box.delete(stopLossZone)
+    
+    // Create new zones based on individual toggles
+    if not na(profitZoneBottom) and not na(profitZoneTop) and not na(stopZoneBottom) and not na(stopZoneTop)
+        // Profit zone - only if enabled
+        if i_showProfitZone
+            profitZone := box.new(entryBarIndex, profitZoneBottom, bar_index, profitZoneTop, 
+                                 color.new(color.white, 100), border_width=0)
+            box.set_bgcolor(profitZone, color.new(i_profitZoneColor, i_profitZoneTransparency))
+        
+        // Stop loss zone - only if enabled
+        if i_showStopLossZone
+            stopLossZone := box.new(entryBarIndex, stopZoneBottom, bar_index, stopZoneTop, 
+                                   color.new(color.white, 100), border_width=0)
+            box.set_bgcolor(stopLossZone, color.new(i_stopLossZoneColor, i_stopLossZoneTransparency))
+
+// P&L Label
+if hasActivePosition and i_showPnLLabels and barstate.islast
+    if not na(pnlLabel)
+        label.delete(pnlLabel)
+    
+    string pnlText = positionType + " Position\nEntry: " + str.tostring(entryPrice, format.mintick) + 
+                     "\nCurrent: " + str.tostring(close, format.mintick) + 
+                     "\nP&L: " + str.tostring(currentPnL, format.mintick) + 
+                     " (" + str.tostring(currentPnLPercent, "#.##") + "%)\nR:R: " + 
+                     str.tostring(rrRatio, "#.##") + ":1"
+    
+    color pnlColor = currentPnL >= 0 ? color.green : color.red
+    
+    pnlLabel := label.new(bar_index, high, text=pnlText, 
+                         style=label.style_label_right, 
+                         color=color.new(pnlColor, 20), 
+                         textcolor=color.white, 
+                         size=size.normal)
+
+// Clean up when position is closed or zones are disabled
+if not hasActivePosition or not i_showPositionZones
+    if not na(profitZone)
+        box.delete(profitZone)
+        profitZone := na
+    if not na(stopLossZone)
+        box.delete(stopLossZone)
+        stopLossZone := na
+else
+    // Clean up individual zones when their toggles are disabled
+    if not i_showProfitZone and not na(profitZone)
+        box.delete(profitZone)
+        profitZone := na
+    if not i_showStopLossZone and not na(stopLossZone)
+        box.delete(stopLossZone)
+        stopLossZone := na
+
+if not hasActivePosition or not i_showPnLLabels
+    if not na(pnlLabel)
+        label.delete(pnlLabel)
+        pnlLabel := na
+
+// Additional debug info for box status (after variables are declared)
+if i_showDebugLabel and barstate.islast
+    string boxStatusText = "--- BOX STATUS ---\nProfit Zone Active: " + str.tostring(not na(profitZone)) + "\nStop Loss Zone Active: " + str.tostring(not na(stopLossZone)) + "\nHTF Range Box Active: " + str.tostring(not na(htfRangeBox))
+    label.new(bar_index, low, boxStatusText, style=label.style_label_up, color=color.orange, textcolor=color.black, size=size.small)
