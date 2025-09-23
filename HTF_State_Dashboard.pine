@@ -1,0 +1,665 @@
+//@version=6
+indicator("Pattern Pulse D&R Dashboard", shorttitle="Pattern Pulse D&R Dashboard", overlay=false)
+
+// --- Input Controls ---
+i_symbol = input.string("AAPL", "Ticker Symbol", tooltip="Enter the ticker symbol to monitor")
+i_showAlerts = input.bool(true, "Enable State Change Alerts")
+i_dashboardPosition = input.string("top_center", "Dashboard Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
+i_showDebug = input.bool(false, "Show Debug Information")
+
+// --- Global Variables ---
+// State tracking for each timeframe
+var int state_4h = 0
+var int state_daily = 0
+var int state_weekly = 0
+var int state_monthly = 0
+var int state_quarterly = 0
+
+// Previous states for change detection
+var int prevState_4h = 0
+var int prevState_daily = 0
+var int prevState_weekly = 0
+var int prevState_monthly = 0
+var int prevState_quarterly = 0
+
+// Last state change timestamps
+var int lastChange_4h = 0
+var int lastChange_daily = 0
+var int lastChange_weekly = 0
+var int lastChange_monthly = 0
+var int lastChange_quarterly = 0
+
+// --- Data Retrieval for Each Timeframe ---
+// Use current chart's ticker (same as HTF_Deviation_Retracement)
+// Get HTF data for each timeframe (using current chart's ticker)
+// 4H Data
+[htfHigh_4h_raw, htfLow_4h_raw, htfConfirmed_4h] = request.security(syminfo.tickerid, "240", [high, low, barstate.isconfirmed], lookahead=barmerge.lookahead_off)
+
+// Daily Data  
+[htfHigh_daily_raw, htfLow_daily_raw, htfConfirmed_daily] = request.security(syminfo.tickerid, "1D", [high, low, barstate.isconfirmed], lookahead=barmerge.lookahead_off)
+
+// Weekly Data
+[htfHigh_weekly_raw, htfLow_weekly_raw, htfConfirmed_weekly] = request.security(syminfo.tickerid, "1W", [high, low, barstate.isconfirmed], lookahead=barmerge.lookahead_off)
+
+// Monthly Data
+[htfHigh_monthly_raw, htfLow_monthly_raw, htfConfirmed_monthly] = request.security(syminfo.tickerid, "1M", [high, low, barstate.isconfirmed], lookahead=barmerge.lookahead_off)
+
+// Quarterly Data (3 months)
+[htfHigh_quarterly_raw, htfLow_quarterly_raw, htfConfirmed_quarterly] = request.security(syminfo.tickerid, "3M", [high, low, barstate.isconfirmed], lookahead=barmerge.lookahead_off)
+
+// Store HTF values only when HTF bars are confirmed (same logic as HTF_Deviation_Retracement)
+var float storedHTFHigh_4h = na
+var float storedHTFLow_4h = na
+var float storedHTFHigh_daily = na
+var float storedHTFLow_daily = na
+var float storedHTFHigh_weekly = na
+var float storedHTFLow_weekly = na
+var float storedHTFHigh_monthly = na
+var float storedHTFLow_monthly = na
+var float storedHTFHigh_quarterly = na
+var float storedHTFLow_quarterly = na
+
+// Store 4H values when confirmed
+if htfConfirmed_4h and not na(htfHigh_4h_raw) and not na(htfLow_4h_raw)
+    storedHTFHigh_4h := htfHigh_4h_raw
+    storedHTFLow_4h := htfLow_4h_raw
+
+// Store Daily values when confirmed
+if htfConfirmed_daily and not na(htfHigh_daily_raw) and not na(htfLow_daily_raw)
+    storedHTFHigh_daily := htfHigh_daily_raw
+    storedHTFLow_daily := htfLow_daily_raw
+
+// Store Weekly values when confirmed
+if htfConfirmed_weekly and not na(htfHigh_weekly_raw) and not na(htfLow_weekly_raw)
+    storedHTFHigh_weekly := htfHigh_weekly_raw
+    storedHTFLow_weekly := htfLow_weekly_raw
+
+// Store Monthly values when confirmed
+if htfConfirmed_monthly and not na(htfHigh_monthly_raw) and not na(htfLow_monthly_raw)
+    storedHTFHigh_monthly := htfHigh_monthly_raw
+    storedHTFLow_monthly := htfLow_monthly_raw
+
+// Store Quarterly values when confirmed
+if htfConfirmed_quarterly and not na(htfHigh_quarterly_raw) and not na(htfLow_quarterly_raw)
+    storedHTFHigh_quarterly := htfHigh_quarterly_raw
+    storedHTFLow_quarterly := htfLow_quarterly_raw
+
+// Use stored values for calculations (same as HTF_Deviation_Retracement)
+htfHigh_4h = storedHTFHigh_4h
+htfLow_4h = storedHTFLow_4h
+htfHigh_daily = storedHTFHigh_daily
+htfLow_daily = storedHTFLow_daily
+htfHigh_weekly = storedHTFHigh_weekly
+htfLow_weekly = storedHTFLow_weekly
+htfHigh_monthly = storedHTFHigh_monthly
+htfLow_monthly = storedHTFLow_monthly
+htfHigh_quarterly = storedHTFHigh_quarterly
+htfLow_quarterly = storedHTFLow_quarterly
+
+// Use current chart's prices (same as HTF_Deviation_Retracement)
+currentHigh = high
+currentLow = low  
+currentClose = close
+
+// --- Break Detection Logic (EXACT copy from HTF_Deviation_Retracement) ---
+// Determine retracement direction based on which HTF level was broken
+// If low was broken: retracement goes from low (0%) to high (100%)
+// If high was broken: retracement goes from high (0%) to low (100%)
+var bool lowWasBroken_4h = false
+var bool highWasBroken_4h = false
+var bool lowWasBroken_daily = false
+var bool highWasBroken_daily = false
+var bool lowWasBroken_weekly = false
+var bool highWasBroken_weekly = false
+var bool lowWasBroken_monthly = false
+var bool highWasBroken_monthly = false
+var bool lowWasBroken_quarterly = false
+var bool highWasBroken_quarterly = false
+
+// Detect breaks for each timeframe - use historical data to determine which was broken first
+// 4H breaks
+if not na(htfLow_4h) and currentLow < htfLow_4h
+    lowWasBroken_4h := true
+    highWasBroken_4h := false
+if not na(htfHigh_4h) and currentHigh > htfHigh_4h
+    highWasBroken_4h := true
+    lowWasBroken_4h := false
+
+// Daily breaks
+if not na(htfLow_daily) and currentLow < htfLow_daily
+    lowWasBroken_daily := true
+    highWasBroken_daily := false
+if not na(htfHigh_daily) and currentHigh > htfHigh_daily
+    highWasBroken_daily := true
+    lowWasBroken_daily := false
+
+// Weekly breaks
+if not na(htfLow_weekly) and currentLow < htfLow_weekly
+    lowWasBroken_weekly := true
+    highWasBroken_weekly := false
+if not na(htfHigh_weekly) and currentHigh > htfHigh_weekly
+    highWasBroken_weekly := true
+    lowWasBroken_weekly := false
+
+// Monthly breaks
+if not na(htfLow_monthly) and currentLow < htfLow_monthly
+    lowWasBroken_monthly := true
+    highWasBroken_monthly := false
+if not na(htfHigh_monthly) and currentHigh > htfHigh_monthly
+    highWasBroken_monthly := true
+    lowWasBroken_monthly := false
+
+// Quarterly breaks
+if not na(htfLow_quarterly) and currentLow < htfLow_quarterly
+    lowWasBroken_quarterly := true
+    highWasBroken_quarterly := false
+if not na(htfHigh_quarterly) and currentHigh > htfHigh_quarterly
+    highWasBroken_quarterly := true
+    lowWasBroken_quarterly := false
+
+// Reset when new HTF bar forms (EXACT copy from HTF_Deviation_Retracement)
+if htfHigh_4h != htfHigh_4h[1] or htfLow_4h != htfLow_4h[1]
+    lowWasBroken_4h := false
+    highWasBroken_4h := false
+
+if htfHigh_daily != htfHigh_daily[1] or htfLow_daily != htfLow_daily[1]
+    lowWasBroken_daily := false
+    highWasBroken_daily := false
+
+if htfHigh_weekly != htfHigh_weekly[1] or htfLow_weekly != htfLow_weekly[1]
+    lowWasBroken_weekly := false
+    highWasBroken_weekly := false
+
+if htfHigh_monthly != htfHigh_monthly[1] or htfLow_monthly != htfLow_monthly[1]
+    lowWasBroken_monthly := false
+    highWasBroken_monthly := false
+
+if htfHigh_quarterly != htfHigh_quarterly[1] or htfLow_quarterly != htfLow_quarterly[1]
+    lowWasBroken_quarterly := false
+    highWasBroken_quarterly := false
+
+// --- Retracement Level Calculations (EXACT copy from HTF_Deviation_Retracement) ---
+// Calculate retracement levels for each timeframe based on break direction
+// 4H Levels
+htfRange_4h = htfHigh_4h - htfLow_4h
+retrace125Value_4h = htfRange_4h * 0.125
+retrace25Value_4h = htfRange_4h * 0.25
+retrace50Value_4h = htfRange_4h * 0.50
+
+var float bullish125Level_4h = na
+var float bullish25Level_4h = na
+var float bullish50Level_4h = na
+var float bearish125Level_4h = na
+var float bearish25Level_4h = na
+var float bearish50Level_4h = na
+
+if lowWasBroken_4h
+    bullish125Level_4h := htfLow_4h + retrace125Value_4h
+    bullish25Level_4h := htfLow_4h + retrace25Value_4h
+    bullish50Level_4h := htfLow_4h + retrace50Value_4h
+    bearish125Level_4h := htfLow_4h + retrace125Value_4h
+    bearish25Level_4h := htfLow_4h + retrace25Value_4h
+    bearish50Level_4h := htfLow_4h + retrace50Value_4h
+else if highWasBroken_4h
+    bullish125Level_4h := htfHigh_4h - retrace125Value_4h
+    bullish25Level_4h := htfHigh_4h - retrace25Value_4h
+    bullish50Level_4h := htfHigh_4h - retrace50Value_4h
+    bearish125Level_4h := htfHigh_4h - retrace125Value_4h
+    bearish25Level_4h := htfHigh_4h - retrace25Value_4h
+    bearish50Level_4h := htfHigh_4h - retrace50Value_4h
+else
+    bullish125Level_4h := htfHigh_4h - retrace125Value_4h
+    bullish25Level_4h := htfHigh_4h - retrace25Value_4h
+    bullish50Level_4h := htfHigh_4h - retrace50Value_4h
+    bearish125Level_4h := htfLow_4h + retrace125Value_4h
+    bearish25Level_4h := htfLow_4h + retrace25Value_4h
+    bearish50Level_4h := htfLow_4h + retrace50Value_4h
+
+// Daily Levels
+htfRange_daily = htfHigh_daily - htfLow_daily
+retrace125Value_daily = htfRange_daily * 0.125
+retrace25Value_daily = htfRange_daily * 0.25
+retrace50Value_daily = htfRange_daily * 0.50
+
+var float bullish125Level_daily = na
+var float bullish25Level_daily = na
+var float bullish50Level_daily = na
+var float bearish125Level_daily = na
+var float bearish25Level_daily = na
+var float bearish50Level_daily = na
+
+if lowWasBroken_daily
+    bullish125Level_daily := htfLow_daily + retrace125Value_daily
+    bullish25Level_daily := htfLow_daily + retrace25Value_daily
+    bullish50Level_daily := htfLow_daily + retrace50Value_daily
+    bearish125Level_daily := htfLow_daily + retrace125Value_daily
+    bearish25Level_daily := htfLow_daily + retrace25Value_daily
+    bearish50Level_daily := htfLow_daily + retrace50Value_daily
+else if highWasBroken_daily
+    bullish125Level_daily := htfHigh_daily - retrace125Value_daily
+    bullish25Level_daily := htfHigh_daily - retrace25Value_daily
+    bullish50Level_daily := htfHigh_daily - retrace50Value_daily
+    bearish125Level_daily := htfHigh_daily - retrace125Value_daily
+    bearish25Level_daily := htfHigh_daily - retrace25Value_daily
+    bearish50Level_daily := htfHigh_daily - retrace50Value_daily
+else
+    bullish125Level_daily := htfHigh_daily - retrace125Value_daily
+    bullish25Level_daily := htfHigh_daily - retrace25Value_daily
+    bullish50Level_daily := htfHigh_daily - retrace50Value_daily
+    bearish125Level_daily := htfLow_daily + retrace125Value_daily
+    bearish25Level_daily := htfLow_daily + retrace25Value_daily
+    bearish50Level_daily := htfLow_daily + retrace50Value_daily
+
+// Weekly Levels
+htfRange_weekly = htfHigh_weekly - htfLow_weekly
+retrace125Value_weekly = htfRange_weekly * 0.125
+retrace25Value_weekly = htfRange_weekly * 0.25
+retrace50Value_weekly = htfRange_weekly * 0.50
+
+var float bullish125Level_weekly = na
+var float bullish25Level_weekly = na
+var float bullish50Level_weekly = na
+var float bearish125Level_weekly = na
+var float bearish25Level_weekly = na
+var float bearish50Level_weekly = na
+
+if lowWasBroken_weekly
+    bullish125Level_weekly := htfLow_weekly + retrace125Value_weekly
+    bullish25Level_weekly := htfLow_weekly + retrace25Value_weekly
+    bullish50Level_weekly := htfLow_weekly + retrace50Value_weekly
+    bearish125Level_weekly := htfLow_weekly + retrace125Value_weekly
+    bearish25Level_weekly := htfLow_weekly + retrace25Value_weekly
+    bearish50Level_weekly := htfLow_weekly + retrace50Value_weekly
+else if highWasBroken_weekly
+    bullish125Level_weekly := htfHigh_weekly - retrace125Value_weekly
+    bullish25Level_weekly := htfHigh_weekly - retrace25Value_weekly
+    bullish50Level_weekly := htfHigh_weekly - retrace50Value_weekly
+    bearish125Level_weekly := htfHigh_weekly - retrace125Value_weekly
+    bearish25Level_weekly := htfHigh_weekly - retrace25Value_weekly
+    bearish50Level_weekly := htfHigh_weekly - retrace50Value_weekly
+else
+    bullish125Level_weekly := htfHigh_weekly - retrace125Value_weekly
+    bullish25Level_weekly := htfHigh_weekly - retrace25Value_weekly
+    bullish50Level_weekly := htfHigh_weekly - retrace50Value_weekly
+    bearish125Level_weekly := htfLow_weekly + retrace125Value_weekly
+    bearish25Level_weekly := htfLow_weekly + retrace25Value_weekly
+    bearish50Level_weekly := htfLow_weekly + retrace50Value_weekly
+
+// Monthly Levels
+htfRange_monthly = htfHigh_monthly - htfLow_monthly
+retrace125Value_monthly = htfRange_monthly * 0.125
+retrace25Value_monthly = htfRange_monthly * 0.25
+retrace50Value_monthly = htfRange_monthly * 0.50
+
+var float bullish125Level_monthly = na
+var float bullish25Level_monthly = na
+var float bullish50Level_monthly = na
+var float bearish125Level_monthly = na
+var float bearish25Level_monthly = na
+var float bearish50Level_monthly = na
+
+if lowWasBroken_monthly
+    bullish125Level_monthly := htfLow_monthly + retrace125Value_monthly
+    bullish25Level_monthly := htfLow_monthly + retrace25Value_monthly
+    bullish50Level_monthly := htfLow_monthly + retrace50Value_monthly
+    bearish125Level_monthly := htfLow_monthly + retrace125Value_monthly
+    bearish25Level_monthly := htfLow_monthly + retrace25Value_monthly
+    bearish50Level_monthly := htfLow_monthly + retrace50Value_monthly
+else if highWasBroken_monthly
+    bullish125Level_monthly := htfHigh_monthly - retrace125Value_monthly
+    bullish25Level_monthly := htfHigh_monthly - retrace25Value_monthly
+    bullish50Level_monthly := htfHigh_monthly - retrace50Value_monthly
+    bearish125Level_monthly := htfHigh_monthly - retrace125Value_monthly
+    bearish25Level_monthly := htfHigh_monthly - retrace25Value_monthly
+    bearish50Level_monthly := htfHigh_monthly - retrace50Value_monthly
+else
+    bullish125Level_monthly := htfHigh_monthly - retrace125Value_monthly
+    bullish25Level_monthly := htfHigh_monthly - retrace25Value_monthly
+    bullish50Level_monthly := htfHigh_monthly - retrace50Value_monthly
+    bearish125Level_monthly := htfLow_monthly + retrace125Value_monthly
+    bearish25Level_monthly := htfLow_monthly + retrace25Value_monthly
+    bearish50Level_monthly := htfLow_monthly + retrace50Value_monthly
+
+// Quarterly Levels
+htfRange_quarterly = htfHigh_quarterly - htfLow_quarterly
+retrace125Value_quarterly = htfRange_quarterly * 0.125
+retrace25Value_quarterly = htfRange_quarterly * 0.25
+retrace50Value_quarterly = htfRange_quarterly * 0.50
+
+var float bullish125Level_quarterly = na
+var float bullish25Level_quarterly = na
+var float bullish50Level_quarterly = na
+var float bearish125Level_quarterly = na
+var float bearish25Level_quarterly = na
+var float bearish50Level_quarterly = na
+
+if lowWasBroken_quarterly
+    bullish125Level_quarterly := htfLow_quarterly + retrace125Value_quarterly
+    bullish25Level_quarterly := htfLow_quarterly + retrace25Value_quarterly
+    bullish50Level_quarterly := htfLow_quarterly + retrace50Value_quarterly
+    bearish125Level_quarterly := htfLow_quarterly + retrace125Value_quarterly
+    bearish25Level_quarterly := htfLow_quarterly + retrace25Value_quarterly
+    bearish50Level_quarterly := htfLow_quarterly + retrace50Value_quarterly
+else if highWasBroken_quarterly
+    bullish125Level_quarterly := htfHigh_quarterly - retrace125Value_quarterly
+    bullish25Level_quarterly := htfHigh_quarterly - retrace25Value_quarterly
+    bullish50Level_quarterly := htfHigh_quarterly - retrace50Value_quarterly
+    bearish125Level_quarterly := htfHigh_quarterly - retrace125Value_quarterly
+    bearish25Level_quarterly := htfHigh_quarterly - retrace25Value_quarterly
+    bearish50Level_quarterly := htfHigh_quarterly - retrace50Value_quarterly
+else
+    bullish125Level_quarterly := htfHigh_quarterly - retrace125Value_quarterly
+    bullish25Level_quarterly := htfHigh_quarterly - retrace25Value_quarterly
+    bullish50Level_quarterly := htfHigh_quarterly - retrace50Value_quarterly
+    bearish125Level_quarterly := htfLow_quarterly + retrace125Value_quarterly
+    bearish25Level_quarterly := htfLow_quarterly + retrace25Value_quarterly
+    bearish50Level_quarterly := htfLow_quarterly + retrace50Value_quarterly
+
+// --- State Machine Function (EXACT copy from HTF_Deviation_Retracement) ---
+f_getState(htfHigh, htfLow, currentHigh, currentLow, currentClose, currentState, bullish25Level, bullish50Level, bearish25Level, bearish50Level) =>
+    newState = currentState
+    
+    // Check if new HTF bar formed (reset to neutral) - EXACT same logic as HTF_Deviation_Retracement
+    if htfHigh != htfHigh[1] or htfLow != htfLow[1]
+        newState := 0 // Reset to neutral state
+    else
+        // Apply the EXACT same state machine logic as HTF_Deviation_Retracement
+        switch currentState
+            0 => // Neutral state: waiting for a deviation.
+                if currentHigh > htfHigh
+                    newState := 1 // Price deviated above.
+                else if currentLow < htfLow
+                    newState := 2 // Price deviated below.
+            1 => // Deviated Above state: waiting for return to range.
+                if currentClose < htfHigh
+                    // Check retracement levels to determine appropriate state
+                    if currentClose < bearish50Level
+                        newState := 11 // Direct to Bearish 50% if below 50% retrace
+                    else if currentClose < bearish25Level
+                        newState := 10 // Direct to Bearish 25% if below 25% retrace
+                    else
+                        newState := 3 // Price has returned to range
+            2 => // Deviated Below state: waiting for return to range.
+                if currentClose > htfLow
+                    // Check retracement levels to determine appropriate state
+                    if currentClose > bullish50Level
+                        newState := 6 // Direct to Bullish 50% if above 50% retrace
+                    else if currentClose > bullish25Level
+                        newState := 5 // Direct to Bullish 25% if above 25% retrace
+                    else
+                        newState := 4 // Price has returned to range
+            3 => // Returned from Above: now track bearish retracements
+                if currentClose < bearish25Level
+                    newState := 10 // Bearish - Below 25% Retrace
+                else if currentClose > htfHigh
+                    newState := 1 // Back to deviated above
+            4 => // Returned from Below: now track bullish retracements
+                if currentClose > bullish25Level
+                    newState := 5 // Bullish - Above 25% Retrace
+                else if currentClose < htfLow
+                    newState := 2 // Back to deviated below
+            5 => // Bullish Above 25%: track progression or retracement
+                if currentClose > bullish50Level
+                    newState := 6 // Bullish - Above 50% Retrace
+                else if currentClose < bullish25Level
+                    newState := 9 // Bullish - Fell Below 25% (retracement)
+            6 => // Bullish Above 50%: track progression or retracement
+                if currentClose > htfHigh
+                    newState := 7 // Bullish - Above 100% (HTF High broken)
+                else if currentClose < bullish50Level
+                    newState := 8 // Bullish - Fell Below 50% (retracement)
+            7 => // Bullish Above 100% (HTF High): track continuation or false break
+                if currentClose < htfHigh
+                    newState := 1 // False break - back to deviated above
+                // If continues above HTF High, stay in state 7 or reset to 0 for new cycle
+            8 => // Bullish Fell Below 50%: track recovery or deeper retracement
+                if currentClose > bullish50Level
+                    newState := 6 // Recovery - back above 50%
+                else if currentClose < bullish25Level
+                    newState := 9 // Deeper retracement - below 25%
+            9 => // Bullish Fell Below 25%: track recovery
+                if currentClose > bullish25Level
+                    newState := 5 // Recovery - back above 25%
+                else if currentClose < htfLow
+                    newState := 2 // Back to deviated below
+            10 => // Bearish Below 25%: track progression or retracement
+                if currentClose < bearish50Level
+                    newState := 11 // Bearish - Below 50% Retrace
+                else if currentClose > bearish25Level
+                    newState := 14 // Bearish - Rose Above 25% (retracement)
+            11 => // Bearish Below 50%: track progression or retracement
+                if currentClose < htfLow
+                    newState := 12 // Bearish - Below 100% (HTF Low broken)
+                else if currentClose > bearish50Level
+                    newState := 13 // Bearish - Rose Above 50% (retracement)
+            12 => // Bearish Below 100% (HTF Low): track continuation or false break
+                if currentClose > htfLow
+                    newState := 2 // False break - back to deviated below
+                // If continues below HTF Low, stay in state 12 or reset to 0 for new cycle
+            13 => // Bearish Rose Above 50%: track recovery or deeper retracement
+                if currentClose < bearish50Level
+                    newState := 11 // Recovery - back below 50%
+                else if currentClose > bearish25Level
+                    newState := 14 // Deeper retracement - above 25%
+            14 => // Bearish Rose Above 25%: track recovery
+                if currentClose < bearish25Level
+                    newState := 10 // Recovery - back below 25%
+                else if currentClose > htfHigh
+                    newState := 1 // Back to deviated above
+        
+        newState
+    
+    newState
+
+// --- State Detection for Each Timeframe ---
+// Update states for each timeframe (all use the same current chart prices against their respective HTF ranges)
+state_4h := f_getState(htfHigh_4h, htfLow_4h, currentHigh, currentLow, currentClose, state_4h, bullish25Level_4h, bullish50Level_4h, bearish25Level_4h, bearish50Level_4h)
+state_daily := f_getState(htfHigh_daily, htfLow_daily, currentHigh, currentLow, currentClose, state_daily, bullish25Level_daily, bullish50Level_daily, bearish25Level_daily, bearish50Level_daily)
+state_weekly := f_getState(htfHigh_weekly, htfLow_weekly, currentHigh, currentLow, currentClose, state_weekly, bullish25Level_weekly, bullish50Level_weekly, bearish25Level_weekly, bearish50Level_weekly)
+state_monthly := f_getState(htfHigh_monthly, htfLow_monthly, currentHigh, currentLow, currentClose, state_monthly, bullish25Level_monthly, bullish50Level_monthly, bearish25Level_monthly, bearish50Level_monthly)
+state_quarterly := f_getState(htfHigh_quarterly, htfLow_quarterly, currentHigh, currentLow, currentClose, state_quarterly, bullish25Level_quarterly, bullish50Level_quarterly, bearish25Level_quarterly, bearish50Level_quarterly)
+
+// --- Use Calculated Retracement Levels for Display ---
+// Use the retracement levels calculated above with proper break detection logic
+retrace125_4h = bullish125Level_4h
+retrace25_4h = bullish25Level_4h
+retrace50_4h = bullish50Level_4h
+
+retrace125_daily = bullish125Level_daily
+retrace25_daily = bullish25Level_daily
+retrace50_daily = bullish50Level_daily
+
+retrace125_weekly = bullish125Level_weekly
+retrace25_weekly = bullish25Level_weekly
+retrace50_weekly = bullish50Level_weekly
+
+retrace125_monthly = bullish125Level_monthly
+retrace25_monthly = bullish25Level_monthly
+retrace50_monthly = bullish50Level_monthly
+
+retrace125_quarterly = bullish125Level_quarterly
+retrace25_quarterly = bullish25Level_quarterly
+retrace50_quarterly = bullish50Level_quarterly
+
+// --- State Change Detection ---
+// Check for state changes and update timestamps
+if state_4h != prevState_4h
+    lastChange_4h := bar_index
+    prevState_4h := state_4h
+    
+if state_daily != prevState_daily
+    lastChange_daily := bar_index
+    prevState_daily := state_daily
+    
+if state_weekly != prevState_weekly
+    lastChange_weekly := bar_index
+    prevState_weekly := state_weekly
+    
+if state_monthly != prevState_monthly
+    lastChange_monthly := bar_index
+    prevState_monthly := state_monthly
+    
+if state_quarterly != prevState_quarterly
+    lastChange_quarterly := bar_index
+    prevState_quarterly := state_quarterly
+
+// --- State Description Function ---
+f_getStateDescription(state) =>
+    switch state
+        0 => "Neutral"
+        1 => "Deviated Above"
+        2 => "Deviated Below"
+        3 => "Returned from Above"
+        4 => "Returned from Below"
+        5 => "Bullish 25%"
+        6 => "Bullish 50%"
+        7 => "Bullish 100%"
+        8 => "Bullish Fell 50%"
+        9 => "Bullish Fell 25%"
+        10 => "Bearish 25%"
+        11 => "Bearish 50%"
+        12 => "Bearish 100%"
+        13 => "Bearish Rose 50%"
+        14 => "Bearish Rose 25%"
+        => "Unknown"
+
+// --- State Color Function ---
+f_getStateColor(state) =>
+    switch state
+        0 => color.gray
+        1 => color.blue
+        2 => color.orange
+        3 => color.purple
+        4 => color.purple
+        5 => color.new(color.green, 20)
+        6 => color.new(color.green, 0)
+        7 => color.new(color.lime, 0)
+        8 => color.new(color.green, 40)
+        9 => color.new(color.green, 60)
+        10 => color.new(color.red, 20)
+        11 => color.new(color.red, 0)
+        12 => color.new(color.maroon, 0)
+        13 => color.new(color.red, 40)
+        14 => color.new(color.red, 60)
+        => color.gray
+
+// --- Dashboard Creation ---
+if barstate.islast
+    // Create dashboard table
+    dashboardPosition = i_dashboardPosition == "top_left" ? position.top_left : 
+                      i_dashboardPosition == "top_right" ? position.top_right :
+                      i_dashboardPosition == "bottom_left" ? position.bottom_left :
+                      i_dashboardPosition == "bottom_right" ? position.bottom_right :
+                      i_dashboardPosition == "middle_left" ? position.middle_left :
+                      i_dashboardPosition == "middle_right" ? position.middle_right :
+                      i_dashboardPosition == "top_center" ? position.top_center :
+                      position.middle_center
+    
+    // Create table with conditional columns
+    numColumns = i_showDebug ? 9 : 3
+    var dashboard = table.new(dashboardPosition, numColumns, 7, bgcolor=color.new(color.black, 80), border_width=1)
+    
+    // Clear and rebuild table
+    table.clear(dashboard, 0, 0, numColumns - 1, 6)
+    
+    // Header - always show Timeframe, State, Description
+    table.cell(dashboard, 0, 0, "Pattern Pulse D&R Dashboard - " + syminfo.ticker, text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50), text_halign=text.align_left)
+    table.cell(dashboard, 1, 0, "State", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+    table.cell(dashboard, 2, 0, "Description", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+    
+    // Additional debug columns only when debug is enabled
+    if i_showDebug
+        table.cell(dashboard, 3, 0, "HTF High", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+        table.cell(dashboard, 4, 0, "HTF Low", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+        table.cell(dashboard, 5, 0, "Current", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+        table.cell(dashboard, 6, 0, "12.5%", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+        table.cell(dashboard, 7, 0, "25%", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+        table.cell(dashboard, 8, 0, "50%", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50))
+    
+    // Timeframe rows with debug data
+    timeframes = array.from("4H", "Daily", "Weekly", "Monthly", "Quarterly")
+    states = array.from(state_4h, state_daily, state_weekly, state_monthly, state_quarterly)
+    htfHighs = array.from(htfHigh_4h, htfHigh_daily, htfHigh_weekly, htfHigh_monthly, htfHigh_quarterly)
+    htfLows = array.from(htfLow_4h, htfLow_daily, htfLow_weekly, htfLow_monthly, htfLow_quarterly)
+    retrace125s = array.from(retrace125_4h, retrace125_daily, retrace125_weekly, retrace125_monthly, retrace125_quarterly)
+    retrace25s = array.from(retrace25_4h, retrace25_daily, retrace25_weekly, retrace25_monthly, retrace25_quarterly)
+    retrace50s = array.from(retrace50_4h, retrace50_daily, retrace50_weekly, retrace50_monthly, retrace50_quarterly)
+    
+    for i = 0 to 4
+        row = i + 1
+        timeframe = array.get(timeframes, i)
+        state = array.get(states, i)
+        htfHigh = array.get(htfHighs, i)
+        htfLow = array.get(htfLows, i)
+        retrace125 = array.get(retrace125s, i)
+        retrace25 = array.get(retrace25s, i)
+        retrace50 = array.get(retrace50s, i)
+        stateDesc = f_getStateDescription(state)
+        stateColor = f_getStateColor(state)
+        
+        // Show retracement levels if we have valid HTF data (always show for debugging)
+        showLevels = not na(htfHigh) and not na(htfLow)
+        
+        // Always show Timeframe, State, Description
+        table.cell(dashboard, 0, row, timeframe, text_color=color.white, text_size=size.normal)
+        table.cell(dashboard, 1, row, str.tostring(state), text_color=color.white, text_size=size.normal, bgcolor=color.new(stateColor, 70))
+        table.cell(dashboard, 2, row, stateDesc, text_color=color.white, text_size=size.normal)
+        
+        // Additional debug columns only when debug is enabled
+        if i_showDebug
+            table.cell(dashboard, 3, row, na(htfHigh) ? "N/A" : str.tostring(htfHigh, format.mintick), text_color=color.white, text_size=size.normal)
+            table.cell(dashboard, 4, row, na(htfLow) ? "N/A" : str.tostring(htfLow, format.mintick), text_color=color.white, text_size=size.normal)
+            table.cell(dashboard, 5, row, str.tostring(currentClose, format.mintick), text_color=color.white, text_size=size.normal)
+            table.cell(dashboard, 6, row, showLevels ? str.tostring(retrace125, format.mintick) : "N/A", text_color=color.white, text_size=size.normal)
+            table.cell(dashboard, 7, row, showLevels ? str.tostring(retrace25, format.mintick) : "N/A", text_color=color.white, text_size=size.normal)
+            table.cell(dashboard, 8, row, showLevels ? str.tostring(retrace50, format.mintick) : "N/A", text_color=color.white, text_size=size.normal)
+
+// --- Alerts ---
+if i_showAlerts
+    // Alert on state changes
+    if state_4h != prevState_4h
+        alert("4H State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_4h), alert.freq_once_per_bar)
+    
+    if state_daily != prevState_daily
+        alert("Daily State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_daily), alert.freq_once_per_bar)
+    
+    if state_weekly != prevState_weekly
+        alert("Weekly State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_weekly), alert.freq_once_per_bar)
+    
+    if state_monthly != prevState_monthly
+        alert("Monthly State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_monthly), alert.freq_once_per_bar)
+    
+    if state_quarterly != prevState_quarterly
+        alert("Quarterly State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_quarterly), alert.freq_once_per_bar)
+
+// --- Debug Information ---
+if i_showDebug and barstate.islast
+    // Comprehensive debugging for monthly timeframe (most important for analysis)
+    monthlyRange = htfHigh_monthly - htfLow_monthly
+    monthly25Level = htfLow_monthly + (monthlyRange * 0.25)
+    monthly50Level = htfLow_monthly + (monthlyRange * 0.50)
+    
+    // Calculate what the retracement levels should be based on break detection
+    monthlyRetrace125Value = monthlyRange * 0.125
+    monthlyRetrace25Value = monthlyRange * 0.25
+    monthlyRetrace50Value = monthlyRange * 0.50
+    
+    // Show what the break detection found
+    breakDetectionText = "BREAK DETECTION:\nLow Broken: " + str.tostring(lowWasBroken_monthly) + "\nHigh Broken: " + str.tostring(highWasBroken_monthly)
+    
+    // Show calculated retracement levels
+    retracementText = "RETRACEMENT LEVELS:\nBullish 12.5%: " + str.tostring(bullish125Level_monthly, format.mintick) + "\nBullish 25%: " + str.tostring(bullish25Level_monthly, format.mintick) + "\nBullish 50%: " + str.tostring(bullish50Level_monthly, format.mintick) + "\nBearish 12.5%: " + str.tostring(bearish125Level_monthly, format.mintick) + "\nBearish 25%: " + str.tostring(bearish25Level_monthly, format.mintick) + "\nBearish 50%: " + str.tostring(bearish50Level_monthly, format.mintick)
+    
+    // Show state machine inputs and timing
+    stateMachineText = "STATE MACHINE INPUTS:\nHTF High: " + str.tostring(htfHigh_monthly, format.mintick) + "\nHTF Low: " + str.tostring(htfLow_monthly, format.mintick) + "\nCurrent Close: " + str.tostring(currentClose, format.mintick) + "\nCurrent State: " + str.tostring(state_monthly) + "\nPrevious State: " + str.tostring(prevState_monthly) + "\nState Changed: " + str.tostring(state_monthly != prevState_monthly)
+    
+    // Show bar index alignment
+    barIndexText = "BAR INDEX ALIGNMENT:\nCurrent Bar Index: " + str.tostring(bar_index) + "\nHTF Bar Index: " + str.tostring(htfHigh_monthly != htfHigh_monthly[1] or htfLow_monthly != htfLow_monthly[1] ? "NEW HTF BAR" : "SAME HTF BAR") + "\nLast Change Bar: " + str.tostring(lastChange_monthly)
+    
+    // Show price comparisons
+    priceComparisonText = "PRICE COMPARISONS:\nAbove HTF Low: " + str.tostring(currentClose > htfLow_monthly) + "\nAbove Bullish 25%: " + str.tostring(currentClose > bullish25Level_monthly) + "\nAbove Bullish 50%: " + str.tostring(currentClose > bullish50Level_monthly) + "\nBelow HTF High: " + str.tostring(currentClose < htfHigh_monthly) + "\nBelow Bearish 25%: " + str.tostring(currentClose < bearish25Level_monthly) + "\nBelow Bearish 50%: " + str.tostring(currentClose < bearish50Level_monthly)
+    
+    // Combine all debug information
+    debugText = "HTF DASHBOARD DEBUG - MONTHLY:\n" + breakDetectionText + "\n\n" + retracementText + "\n\n" + stateMachineText + "\n\n" + barIndexText + "\n\n" + priceComparisonText + "\n\nFINAL STATE: " + str.tostring(state_monthly) + " (" + f_getStateDescription(state_monthly) + ")"
+    
+    label.new(bar_index, high, debugText, style=label.style_label_left, color=color.black, size=size.small)

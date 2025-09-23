@@ -6,8 +6,8 @@ indicator("Pattern Pulse Deviation & Retracement", "Pattern Pulse HTF D&R", over
 // --- User Inputs ---
 // Reformatting inputs to be multi-line for compiler stability and readability.
 i_htf = input.timeframe("D", "Higher Timeframe")
-i_retracePercent = input.float(50.0, "Retracement Percentage", 0.1, 100.0)
-i_showBoxes = input.bool(true, "Show HTF Range Boxes")
+i_retracePercent = input.float(25.0, "Retracement Percentage", 0.1, 100.0)
+i_showBoxes = input.bool(false, "Show HTF Range Boxes")
 i_boxColor = input.color(color.gray, "Box Color")
 i_boxTransparency = input.int(100, "Box Transparency", 0, 100)
 i_showHTFLines = input.bool(true, "Show HTF Range Lines")
@@ -417,9 +417,10 @@ if signal100Bearish
 
 // --- Retracement Level Plots (for TradingView crossing alerts) ---
 // These create plots that TradingView can use for "crossing" alerts with direction control
-plot(i_showRetracementLevels ? bullish125Level : na, "12.5% Retracement", color.new(color.red, 0), 2, plot.style_line)
-plot(i_showRetracementLevels ? bullish25Level : na, "25% Retracement", color.new(color.purple, 0), 2, plot.style_line)
-plot(i_showRetracementLevels ? bullish50Level : na, "50% Retracement", color.new(color.green, 0), 2, plot.style_line)
+// Show retracement level plots only on the most recent candle
+plot(i_showRetracementLevels and (barstate.islast or barstate.islastconfirmedhistory) ? bullish125Level : na, "12.5% Retracement", color.new(color.red, 0), 2, plot.style_line)
+plot(i_showRetracementLevels and (barstate.islast or barstate.islastconfirmedhistory) ? bullish25Level : na, "25% Retracement", color.new(color.purple, 0), 2, plot.style_line)
+plot(i_showRetracementLevels and (barstate.islast or barstate.islastconfirmedhistory) ? bullish50Level : na, "50% Retracement", color.new(color.green, 0), 2, plot.style_line)
 
 // Note: Old retracement alert logic removed - now using TradingView crossing alerts with retracement level plots
 
@@ -431,7 +432,8 @@ var box htfRangeBox = na
 if i_showBoxes and (htfHigh != htfHigh[1] or htfLow != htfLow[1])
     if not na(htfRangeBox)
         box.delete(htfRangeBox)
-    htfRangeBox := box.new(bar_index - 5, htfHigh, bar_index + 5, htfLow, color.new(i_boxColor, i_boxTransparency), border_width=1, border_style=line.style_dashed)
+    // Draw HTF range box to the right of the latest bar to avoid covering candles
+    htfRangeBox := box.new(bar_index + 1, htfHigh, bar_index + 6, htfLow, color.new(i_boxColor, i_boxTransparency), border_width=1, border_style=line.style_dashed)
 else if not i_showBoxes and not na(htfRangeBox)
     box.delete(htfRangeBox)
     htfRangeBox := na
@@ -498,7 +500,7 @@ var label bullish50Label = na
 var label bearish50Label = na
 
 // When a new HTF bar forms, update the horizontal lines
-if i_showHTFLines and (htfHigh != htfHigh[1] or htfLow != htfLow[1])
+if i_showHTFLines and ((htfHigh != htfHigh[1] or htfLow != htfLow[1]) or (na(htfHighLabel) and na(htfLowLabel)))
     // Delete old lines and labels
     if not na(htfHighLine)
         line.delete(htfHighLine)
@@ -542,29 +544,37 @@ if i_showHTFLines and (htfHigh != htfHigh[1] or htfLow != htfLow[1])
     htfHighLine := line.new(startBar, htfHigh, endBar, htfHigh, color=color.new(i_htfHighColor, 30), width=1, style=line.style_solid)
     htfLowLine := line.new(startBar, htfLow, endBar, htfLow, color=color.new(i_htfLowColor, 30), width=1, style=line.style_solid)
     
-    // Add labels to the lines
-    string htfHighText = "HTF High: " + str.tostring(htfHigh, format.mintick)
-    string htfLowText = "HTF Low: " + str.tostring(htfLow, format.mintick)
+    // Add labels to the lines with explicit HTF timeframe in the text for clarity
+    string tfDisplay = i_htf
+    string htfHighText = "HTF (" + tfDisplay + ") High: " + str.tostring(htfHigh, format.mintick)
+    string htfLowText = "HTF (" + tfDisplay + ") Low: " + str.tostring(htfLow, format.mintick)
     
-    htfHighLabel := label.new(startBar + i_labelOffset, htfHigh, text=htfHighText, style=label.style_label_left, color=color.new(i_htfHighColor, 80), textcolor=i_htfHighColor, size=getFontSize())
-    htfLowLabel := label.new(startBar + i_labelOffset, htfLow, text=htfLowText, style=label.style_label_left, color=color.new(i_htfLowColor, 80), textcolor=i_htfLowColor, size=getFontSize())
+    // Align HTF labels with retracement label placement near the right side
+    htfHighLabel := label.new(bar_index + i_labelOffset, htfHigh, text=htfHighText, style=label.style_label_left, color=color.new(i_htfHighColor, 80), textcolor=i_htfHighColor, size=getFontSize())
+    htfLowLabel := label.new(bar_index + i_labelOffset, htfLow, text=htfLowText, style=label.style_label_left, color=color.new(i_htfLowColor, 80), textcolor=i_htfLowColor, size=getFontSize())
     
     // Create retracement lines when HTF lines are created
-    if i_showRetracementLines
+    if i_showRetracementLines and (barstate.islast or barstate.islastconfirmedhistory)
         // 12.5% retracement lines
         if i_show125Retrace
-            bullish125Line := line.new(startBar, bullish125Level, endBar, bullish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
-            bullish125Label := label.new(startBar + i_labelOffset, bullish125Level, text="12.5% Retrace: " + str.tostring(bullish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
+            int lastStartBar = bar_index
+            int lastEndBar = bar_index + 1
+            bullish125Line := line.new(lastStartBar, bullish125Level, lastEndBar, bullish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish125Label := label.new(lastStartBar + i_labelOffset, bullish125Level, text="12.5% Retrace: " + str.tostring(bullish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
         
         // 25% retracement lines
         if i_show25Retrace
-            bullish25Line := line.new(startBar, bullish25Level, endBar, bullish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
-            bullish25Label := label.new(startBar + i_labelOffset, bullish25Level, text="25% Retrace: " + str.tostring(bullish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
+            int lastStartBar2 = bar_index
+            int lastEndBar2 = bar_index + 1
+            bullish25Line := line.new(lastStartBar2, bullish25Level, lastEndBar2, bullish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish25Label := label.new(lastStartBar2 + i_labelOffset, bullish25Level, text="25% Retrace: " + str.tostring(bullish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
         
         // 50% retracement lines
         if i_show50Retrace
-            bullish50Line := line.new(startBar, bullish50Level, endBar, bullish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
-            bullish50Label := label.new(startBar + i_labelOffset, bullish50Level, text="50% Retrace: " + str.tostring(bullish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+            int lastStartBar3 = bar_index
+            int lastEndBar3 = bar_index + 1
+            bullish50Line := line.new(lastStartBar3, bullish50Level, lastEndBar3, bullish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
+            bullish50Label := label.new(lastStartBar3 + i_labelOffset, bullish50Level, text="50% Retrace: " + str.tostring(bullish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
 
 // Create retracement lines on every bar when state conditions are met (for lower timeframes)
 // Use HTF-based conditions to ensure lines appear on all timeframes
@@ -591,70 +601,140 @@ if htfHigh != htfHigh[1] or htfLow != htfLow[1]
 htfShowBullishRetracement = htfLastBreakWasAbove
 htfShowBearishRetracement = htfLastBreakWasBelow
 
-if i_showRetracementLines and (htfShowBullishRetracement or htfShowBearishRetracement)
-    // Clean up old retracement lines first
-    if not na(bullish125Line)
-        line.delete(bullish125Line)
-    if not na(bearish125Line)
-        line.delete(bearish125Line)
-    if not na(bullish125Label)
-        label.delete(bullish125Label)
-    if not na(bearish125Label)
-        label.delete(bearish125Label)
-    if not na(bullish25Line)
-        line.delete(bullish25Line)
-    if not na(bearish25Line)
-        line.delete(bearish25Line)
-    if not na(bullish25Label)
-        label.delete(bullish25Label)
-    if not na(bearish25Label)
-        label.delete(bearish25Label)
-    if not na(bullish50Line)
-        line.delete(bullish50Line)
-    if not na(bearish50Line)
-        line.delete(bearish50Line)
-    if not na(bullish50Label)
-        label.delete(bullish50Label)
-    if not na(bearish50Label)
-        label.delete(bearish50Label)
-    
-    // Create new retracement lines aligned with HTF lines
-    int currentStartBar = bar_index - 1  // Start from previous bar to align with HTF lines
-    int currentEndBar = currentStartBar + i_lineLength
-    
-    // Price broke ABOVE HTF High - show downward retracement lines from high
+if i_showRetracementLines and (htfShowBullishRetracement or htfShowBearishRetracement) and (barstate.islast or barstate.islastconfirmedhistory)
+    // Determine draw window for the last candle only
+    int currentStartBar = bar_index
+    int currentEndBar = bar_index + 1
+
+    // Update-or-create helpers inlined below for performance and Pine syntax compatibility
+
+    // If showing bullish retracements, update bullish lines and remove bearish ones
     if htfShowBullishRetracement
-        // 12.5% retracement lines (downward from high)
         if i_show125Retrace
-            bullish125Line := line.new(currentStartBar, bullish125Level, currentEndBar, bullish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
-            bullish125Label := label.new(currentStartBar + i_labelOffset, bullish125Level, text="12.5% Retrace: " + str.tostring(bullish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
-        
-        // 25% retracement lines (downward from high)
+            if na(bullish125Line)
+                bullish125Line := line.new(currentStartBar, bullish125Level, currentEndBar, bullish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
+            else
+                line.set_xy1(bullish125Line, currentStartBar, bullish125Level)
+                line.set_xy2(bullish125Line, currentEndBar, bullish125Level)
+                line.set_color(bullish125Line, color.new(i_125RetraceColor, 50))
+            if na(bullish125Label)
+                bullish125Label := label.new(currentStartBar + i_labelOffset, bullish125Level, text="12.5% Retrace: " + str.tostring(bullish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
+            else
+                label.set_xy(bullish125Label, currentStartBar + i_labelOffset, bullish125Level)
+                label.set_text(bullish125Label, "12.5% Retrace: " + str.tostring(bullish125Level, format.mintick))
+                label.set_color(bullish125Label, color.new(i_125RetraceColor, 85))
+                label.set_textcolor(bullish125Label, i_125RetraceColor)
         if i_show25Retrace
-            bullish25Line := line.new(currentStartBar, bullish25Level, currentEndBar, bullish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
-            bullish25Label := label.new(currentStartBar + i_labelOffset, bullish25Level, text="25% Retrace: " + str.tostring(bullish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
-        
-        // 50% retracement lines (downward from high)
+            if na(bullish25Line)
+                bullish25Line := line.new(currentStartBar, bullish25Level, currentEndBar, bullish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
+            else
+                line.set_xy1(bullish25Line, currentStartBar, bullish25Level)
+                line.set_xy2(bullish25Line, currentEndBar, bullish25Level)
+                line.set_color(bullish25Line, color.new(i_25RetraceColor, 50))
+            if na(bullish25Label)
+                bullish25Label := label.new(currentStartBar + i_labelOffset, bullish25Level, text="25% Retrace: " + str.tostring(bullish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
+            else
+                label.set_xy(bullish25Label, currentStartBar + i_labelOffset, bullish25Level)
+                label.set_text(bullish25Label, "25% Retrace: " + str.tostring(bullish25Level, format.mintick))
+                label.set_color(bullish25Label, color.new(i_25RetraceColor, 85))
+                label.set_textcolor(bullish25Label, i_25RetraceColor)
         if i_show50Retrace
-            bullish50Line := line.new(currentStartBar, bullish50Level, currentEndBar, bullish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
-            bullish50Label := label.new(currentStartBar + i_labelOffset, bullish50Level, text="50% Retrace: " + str.tostring(bullish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+            if na(bullish50Line)
+                bullish50Line := line.new(currentStartBar, bullish50Level, currentEndBar, bullish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
+            else
+                line.set_xy1(bullish50Line, currentStartBar, bullish50Level)
+                line.set_xy2(bullish50Line, currentEndBar, bullish50Level)
+                line.set_color(bullish50Line, color.new(i_50RetraceColor, 50))
+            if na(bullish50Label)
+                bullish50Label := label.new(currentStartBar + i_labelOffset, bullish50Level, text="50% Retrace: " + str.tostring(bullish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+            else
+                label.set_xy(bullish50Label, currentStartBar + i_labelOffset, bullish50Level)
+                label.set_text(bullish50Label, "50% Retrace: " + str.tostring(bullish50Level, format.mintick))
+                label.set_color(bullish50Label, color.new(i_50RetraceColor, 85))
+                label.set_textcolor(bullish50Label, i_50RetraceColor)
+        // Clear bearish counterparts if present
+        if not na(bearish125Line)
+            line.delete(bearish125Line)
+            bearish125Line := na
+        if not na(bearish125Label)
+            label.delete(bearish125Label)
+            bearish125Label := na
+        if not na(bearish25Line)
+            line.delete(bearish25Line)
+            bearish25Line := na
+        if not na(bearish25Label)
+            label.delete(bearish25Label)
+            bearish25Label := na
+        if not na(bearish50Line)
+            line.delete(bearish50Line)
+            bearish50Line := na
+        if not na(bearish50Label)
+            label.delete(bearish50Label)
+            bearish50Label := na
     
-    // Price broke BELOW HTF Low - show upward retracement lines from low
+    // If showing bearish retracements, update bearish lines and remove bullish ones
     else if htfShowBearishRetracement
-        // 12.5% retracement lines (upward from low)
         if i_show125Retrace
-            bearish125Line := line.new(currentStartBar, bearish125Level, currentEndBar, bearish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
-            bearish125Label := label.new(currentStartBar + i_labelOffset, bearish125Level, text="12.5% Retrace: " + str.tostring(bearish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
-        
-        // 25% retracement lines (upward from low)
+            if na(bearish125Line)
+                bearish125Line := line.new(currentStartBar, bearish125Level, currentEndBar, bearish125Level, color=color.new(i_125RetraceColor, 50), width=1, style=line.style_dashed)
+            else
+                line.set_xy1(bearish125Line, currentStartBar, bearish125Level)
+                line.set_xy2(bearish125Line, currentEndBar, bearish125Level)
+                line.set_color(bearish125Line, color.new(i_125RetraceColor, 50))
+            if na(bearish125Label)
+                bearish125Label := label.new(currentStartBar + i_labelOffset, bearish125Level, text="12.5% Retrace: " + str.tostring(bearish125Level, format.mintick), style=label.style_label_left, color=color.new(i_125RetraceColor, 85), textcolor=i_125RetraceColor, size=getFontSize())
+            else
+                label.set_xy(bearish125Label, currentStartBar + i_labelOffset, bearish125Level)
+                label.set_text(bearish125Label, "12.5% Retrace: " + str.tostring(bearish125Level, format.mintick))
+                label.set_color(bearish125Label, color.new(i_125RetraceColor, 85))
+                label.set_textcolor(bearish125Label, i_125RetraceColor)
         if i_show25Retrace
-            bearish25Line := line.new(currentStartBar, bearish25Level, currentEndBar, bearish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
-            bearish25Label := label.new(currentStartBar + i_labelOffset, bearish25Level, text="25% Retrace: " + str.tostring(bearish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
-        
-        // 50% retracement lines (upward from low)
+            if na(bearish25Line)
+                bearish25Line := line.new(currentStartBar, bearish25Level, currentEndBar, bearish25Level, color=color.new(i_25RetraceColor, 50), width=1, style=line.style_dashed)
+            else
+                line.set_xy1(bearish25Line, currentStartBar, bearish25Level)
+                line.set_xy2(bearish25Line, currentEndBar, bearish25Level)
+                line.set_color(bearish25Line, color.new(i_25RetraceColor, 50))
+            if na(bearish25Label)
+                bearish25Label := label.new(currentStartBar + i_labelOffset, bearish25Level, text="25% Retrace: " + str.tostring(bearish25Level, format.mintick), style=label.style_label_left, color=color.new(i_25RetraceColor, 85), textcolor=i_25RetraceColor, size=getFontSize())
+            else
+                label.set_xy(bearish25Label, currentStartBar + i_labelOffset, bearish25Level)
+                label.set_text(bearish25Label, "25% Retrace: " + str.tostring(bearish25Level, format.mintick))
+                label.set_color(bearish25Label, color.new(i_25RetraceColor, 85))
+                label.set_textcolor(bearish25Label, i_25RetraceColor)
         if i_show50Retrace
-            bearish50Line := line.new(currentStartBar, bearish50Level, currentEndBar, bearish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
-            bearish50Label := label.new(currentStartBar + i_labelOffset, bearish50Level, text="50% Retrace: " + str.tostring(bearish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+            if na(bearish50Line)
+                bearish50Line := line.new(currentStartBar, bearish50Level, currentEndBar, bearish50Level, color=color.new(i_50RetraceColor, 50), width=1, style=line.style_dashed)
+            else
+                line.set_xy1(bearish50Line, currentStartBar, bearish50Level)
+                line.set_xy2(bearish50Line, currentEndBar, bearish50Level)
+                line.set_color(bearish50Line, color.new(i_50RetraceColor, 50))
+            if na(bearish50Label)
+                bearish50Label := label.new(currentStartBar + i_labelOffset, bearish50Level, text="50% Retrace: " + str.tostring(bearish50Level, format.mintick), style=label.style_label_left, color=color.new(i_50RetraceColor, 85), textcolor=i_50RetraceColor, size=getFontSize())
+            else
+                label.set_xy(bearish50Label, currentStartBar + i_labelOffset, bearish50Level)
+                label.set_text(bearish50Label, "50% Retrace: " + str.tostring(bearish50Level, format.mintick))
+                label.set_color(bearish50Label, color.new(i_50RetraceColor, 85))
+                label.set_textcolor(bearish50Label, i_50RetraceColor)
+        // Clear bullish counterparts if present
+        if not na(bullish125Line)
+            line.delete(bullish125Line)
+            bullish125Line := na
+        if not na(bullish125Label)
+            label.delete(bullish125Label)
+            bullish125Label := na
+        if not na(bullish25Line)
+            line.delete(bullish25Line)
+            bullish25Line := na
+        if not na(bullish25Label)
+            label.delete(bullish25Label)
+            bullish25Label := na
+        if not na(bullish50Line)
+            line.delete(bullish50Line)
+            bullish50Line := na
+        if not na(bullish50Label)
+            label.delete(bullish50Label)
+            bullish50Label := na
 
 else if not i_showHTFLines
     // Clean up lines and labels when disabled
@@ -708,6 +788,13 @@ else if not i_showHTFLines
     if not na(bearish50Label)
         label.delete(bearish50Label)
         bearish50Label := na
+
+// Keep HTF labels aligned to the right of the latest bar like retracement labels
+if i_showHTFLines and (barstate.islast or barstate.islastconfirmedhistory)
+    if not na(htfHighLabel)
+        label.set_xy(htfHighLabel, bar_index + i_labelOffset, htfHigh)
+    if not na(htfLowLabel)
+        label.set_xy(htfLowLabel, bar_index + i_labelOffset, htfLow)
 
 // --- Position Tracking Visuals ---
 // Position zone boxes
@@ -772,8 +859,10 @@ if hasActivePosition and i_showPnLLabels and barstate.islast
     
     color pnlColor = currentPnL >= 0 ? color.green : color.red
     
-    pnlLabel := label.new(bar_index, high, text=pnlText, 
-                         style=label.style_label_right, 
+    // Place P&L label a few bars to the right of the last candle at current price for visibility
+    // Offset further to the right to avoid overlapping retracement labels
+    pnlLabel := label.new(bar_index + 10, close, text=pnlText, 
+                         style=label.style_label_left, 
                          color=color.new(pnlColor, 20), 
                          textcolor=color.white, 
                          size=size.normal)
