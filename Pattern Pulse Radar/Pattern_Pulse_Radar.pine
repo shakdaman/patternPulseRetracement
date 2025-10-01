@@ -401,8 +401,21 @@ if na(scannerTable)
 if barstate.islast
     table.clear(scannerTable, 0, 0, array.size(displayTimeframes), i_maxRows)
     
-    // Header row
-    headerText = "Pattern Pulse Radar - Batch " + str.tostring(i_currentBatch)
+    // Header row - display batch name from settings (up to 15 characters)
+    batchName = switch i_currentBatch
+        1 => "Major Indices"
+        2 => "Tech Giants"
+        3 => "Financial"
+        4 => "Healthcare"
+        5 => "Consumer"
+        6 => "Energy"
+        7 => "Industrial"
+        8 => "Real Estate"
+        9 => "Custom"
+        => "Batch " + str.tostring(i_currentBatch)
+    
+    // Truncate to 15 characters for better space utilization
+    headerText = str.length(batchName) > 15 ? str.substring(batchName, 0, 15) : batchName
     headerBgColor = color.new(color.navy, 50)
     headerTextColor = color.white
     headerTextSize = size.normal
