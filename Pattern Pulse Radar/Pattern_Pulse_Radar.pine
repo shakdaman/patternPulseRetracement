@@ -1,5 +1,5 @@
 //@version=6
-indicator("Pattern Pulse Radar", "PPR", overlay=false, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+indicator("Pattern Pulse Radar", "PPR", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
 // ============================================================================
 // PATTERN PULSE RADAR - Multi-Ticker Multi-Timeframe Pattern Scanner
@@ -36,8 +36,10 @@ i_requireConfirmation = input.bool(true, "Require Confirmation", tooltip="Wait f
 i_requireVolumeConfirmation = input.bool(false, "Require Volume Confirmation", tooltip="Require above-average volume for pattern validity")
 
 // Display Settings
-i_tablePosition = input.string("top_center", "Table Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
+i_tablePosition = input.string("top_left", "Table Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
 i_maxRows = input.int(8, "Max Rows", minval=1, maxval=8, tooltip="Maximum number of tickers to display (matches batch size)")
+i_tableOffsetX = input.int(10, "Table X Offset", minval=0, maxval=100, tooltip="Horizontal offset for table positioning (for dashboard layouts)")
+i_tableOffsetY = input.int(10, "Table Y Offset", minval=0, maxval=100, tooltip="Vertical offset for table positioning (for dashboard layouts)")
 
 // Customizable Ticker Batches
 i_batch1Tickers = input.string("SPY,QQQ,IWM,DIA,GLD,SLV,TLT,OSCR", "Batch 1 - Major Indices/ETFs", tooltip="Comma-separated tickers for Batch 1")
@@ -389,11 +391,11 @@ if na(scannerTable)
         "middle_left" => position.middle_left
         "middle_right" => position.middle_right
         "middle_center" => position.middle_center
-        => position.top_center
+        => position.top_left
     
     tableRows = i_maxRows + 1 // +1 for header
-    tableBgColor = color.new(color.black, 80)
-    scannerTable := table.new(position = positionValue, columns = numCols, rows = tableRows, bgcolor = tableBgColor, border_width = 1)
+    tableBgColor = color.new(color.black, 85) // Slightly more transparent for overlay
+    scannerTable := table.new(position = positionValue, columns = numCols, rows = tableRows, bgcolor = tableBgColor, border_width = 1, frame_width = 1, frame_color = color.gray)
 
 // Clear and rebuild table on each update
 if barstate.islast
@@ -476,11 +478,11 @@ if barstate.islast
                     if str.length(patterns) > 0
                         label.new(bar_index, high - (row * 0.5), debugText, style=label.style_label_down, color=color.blue, textcolor=color.white, size=size.tiny)
                 
-                // Always show Inside Bar debug for OSCR to troubleshoot
-                if ticker == "OSCR" and tf == "D" and hasHistoricalData
+                // Debug Inside Bar for OSCR (only when debug mode is enabled)
+                if i_showDebug and ticker == "OSCR" and tf == "D" and hasHistoricalData
                     insideBarCondition = htfHigh < htfHigh[1] and htfLow > htfLow[1]
                     debugText = "OSCR D HTF InsideBar: H:" + str.tostring(htfHigh) + " H1:" + str.tostring(htfHigh[1]) + " L:" + str.tostring(htfLow) + " L1:" + str.tostring(htfLow[1]) + " Result:" + str.tostring(insideBarCondition) + " Patterns:" + patterns
-                    label.new(bar_index, high - (row * 1.5), debugText, style=label.style_label_down, color=color.orange, textcolor=color.white, size=size.small)
+                    label.new(bar_index, high * 0.80, debugText, style=label.style_label_down, color=color.orange, textcolor=color.white, size=size.tiny)
                 
                 // Pattern detection is now complete using only HTF data
                 // This ensures consistency across all chart timeframes
@@ -572,28 +574,29 @@ if i_showMultipleBatches and barstate.islast
                 textColor = patternCount > 0 ? color.yellow : color.gray
                 table.cell(summaryTable, 1, i + 1, patternSummary, text_color=textColor, text_size=size.tiny, bgcolor=summaryColor)
 
-// Debug information
+// Debug information (only show when debug is enabled)
 if i_showDebug and barstate.islast
     batchText = "Batch: " + str.tostring(i_currentBatch)
     tickerText = " | Tickers: " + str.tostring(array.size(currentTickers))
     timeframeText = " | Timeframes: " + i_timeframes
     debugText = batchText + tickerText + timeframeText
-    debugColor = color.new(color.blue, 80)
+    debugColor = color.new(color.blue, 70)
     debugStyle = label.style_label_down
     debugTextColor = color.white
-    debugSize = size.small
-    label.new(bar_index, high, debugText, style = debugStyle, color = debugColor, textcolor = debugTextColor, size = debugSize)
+    debugSize = size.tiny
+    // Position debug labels to avoid overlapping with tables
+    label.new(bar_index, high * 0.95, debugText, style = debugStyle, color = debugColor, textcolor = debugTextColor, size = debugSize)
     
     // Additional debug: Test current symbol pattern detection
     currentPatterns = detectPatterns()
     if str.length(currentPatterns) > 0
         currentDebugText = "Current Symbol Patterns: " + currentPatterns
-        label.new(bar_index, high - 1, currentDebugText, style = debugStyle, color = color.new(color.green, 80), textcolor = debugTextColor, size = debugSize)
+        label.new(bar_index, high * 0.90, currentDebugText, style = debugStyle, color = color.new(color.green, 70), textcolor = debugTextColor, size = debugSize)
     
     // Debug: Always show current symbol Inside Bar detection
     currentInsideBar = isInsideBar()
     insideBarDebugText = "Current Inside Bar: " + str.tostring(currentInsideBar) + " H:" + str.tostring(high) + " H1:" + str.tostring(high[1]) + " L:" + str.tostring(low) + " L1:" + str.tostring(low[1])
-    label.new(bar_index, high - 2, insideBarDebugText, style = debugStyle, color = color.new(color.red, 80), textcolor = debugTextColor, size = debugSize)
+    label.new(bar_index, high * 0.85, insideBarDebugText, style = debugStyle, color = color.new(color.red, 70), textcolor = debugTextColor, size = debugSize)
 
 // Plot current symbol patterns for reference (fully transparent - serves internal purpose only)
 currentPatterns = detectPatterns()
