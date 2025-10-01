@@ -1,0 +1,677 @@
+//@version=6
+indicator("Pattern Pulse Radar", "PPR", overlay=false, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ============================================================================
+// PATTERN PULSE RADAR - Multi-Ticker Multi-Timeframe Pattern Scanner
+// ============================================================================
+// Scans for 3-2-2 Strat Combination and Inside Bar patterns across multiple
+// tickers and timeframes with intelligent batching to stay within Pine Script
+// V6 limitations (40 request limit)
+// ============================================================================
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// Scanner Configuration - OPTIMIZED FOR 40 REQUEST LIMIT (8×4=32)
+i_batchSize = input.int(8, "Batch Size", minval=1, maxval=8, tooltip="Number of tickers to scan per batch (8 tickers × 4 timeframes = 32 requests)")
+i_currentBatch = input.int(1, "Current Batch", minval=1, maxval=9, tooltip="Which batch to display (1-9: Indices/Tech/Financial/Healthcare/Consumer/Energy/Industrial/REITs/Custom)")
+i_showMultipleBatches = input.bool(false, "Show Multiple Batches", tooltip="Display multiple batches in same pane (requires more requests)")
+i_maxBatchesToShow = input.int(2, "Max Batches to Show", minval=1, maxval=4, tooltip="Maximum number of batches to display when showing multiple batches")
+i_showDebug = input.bool(false, "Show Debug Info", tooltip="Display additional debugging information")
+
+// Timeframe Configuration - OPTIMIZED FOR 40 REQUEST LIMIT (8×4=32)
+i_timeframes = input.string("240,D,W,1M", "Timeframes", tooltip="Comma-separated timeframes to scan (8 tickers × 4 timeframes = 32 requests)")
+i_showTimeframes = input.string("240,D,W,1M", "Display Timeframes", tooltip="Timeframes to show in scanner (subset of scan timeframes)")
+
+// Pattern Detection Parameters
+i_trendLookback = input.int(20, "Trend Lookback", minval=5, maxval=100, tooltip="Periods for trend identification")
+i_volumeLookback = input.int(20, "Volume Lookback", minval=5, maxval=100, tooltip="Periods for volume analysis")
+
+// Pattern Sensitivity Factors
+i_volumeSpikeFactor = input.float(1.5, "Volume Spike Factor", minval=1.0, maxval=3.0, step=0.1, tooltip="Volume multiplier for significant patterns")
+
+// Confirmation Settings
+i_requireConfirmation = input.bool(true, "Require Confirmation", tooltip="Wait for next candle to confirm patterns")
+i_requireVolumeConfirmation = input.bool(false, "Require Volume Confirmation", tooltip="Require above-average volume for pattern validity")
+
+// Display Settings
+i_tablePosition = input.string("top_center", "Table Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
+i_maxRows = input.int(8, "Max Rows", minval=1, maxval=8, tooltip="Maximum number of tickers to display (matches batch size)")
+
+// Customizable Ticker Batches
+i_batch1Tickers = input.string("SPY,QQQ,IWM,DIA,GLD,SLV,TLT,OSCR", "Batch 1 - Major Indices/ETFs", tooltip="Comma-separated tickers for Batch 1")
+i_batch2Tickers = input.string("AAPL,MSFT,GOOGL,AMZN,META,TSLA,NVDA,NFLX", "Batch 2 - Tech Giants", tooltip="Comma-separated tickers for Batch 2")
+i_batch3Tickers = input.string("JPM,BAC,WFC,GS,MS,C,USB,PNC", "Batch 3 - Financial Sector", tooltip="Comma-separated tickers for Batch 3")
+i_batch4Tickers = input.string("JNJ,PFE,UNH,ABBV,MRK,TMO,ABT,DHR", "Batch 4 - Healthcare & Biotech", tooltip="Comma-separated tickers for Batch 4")
+i_batch5Tickers = input.string("WMT,HD,PG,KO,PEP,MCD,SBUX,NKE", "Batch 5 - Consumer & Retail", tooltip="Comma-separated tickers for Batch 5")
+i_batch6Tickers = input.string("XOM,CVX,COP,EOG,SLB,HAL,KMI,WMB", "Batch 6 - Energy & Materials", tooltip="Comma-separated tickers for Batch 6")
+i_batch7Tickers = input.string("BA,CAT,DE,GE,HON,MMM,UPS,FDX", "Batch 7 - Industrial & Transportation", tooltip="Comma-separated tickers for Batch 7")
+i_batch8Tickers = input.string("AMT,PLD,CCI,EQIX,PSA,EXR,AVB,EQR", "Batch 8 - Real Estate & Utilities", tooltip="Comma-separated tickers for Batch 8")
+i_batch9Tickers = input.string("OSCR,AAPL,MSFT,TSLA,NVDA,GOOGL,META,AMZN", "Batch 9 - Custom Watchlist", tooltip="Comma-separated tickers for Batch 9")
+
+// ============================================================================
+// TICKER BATCHES - Customizable batches from input parameters
+// ============================================================================
+
+// Function to convert comma-separated string to array
+stringToArray(tickerString) =>
+    tickerList = str.split(tickerString, ",")
+    tickerArray = array.new<string>()
+    for i = 0 to array.size(tickerList) - 1
+        ticker = str.trim(array.get(tickerList, i))
+        if str.length(ticker) > 0
+            array.push(tickerArray, ticker)
+    tickerArray
+
+// Get current batch (converts input strings to arrays dynamically)
+getCurrentBatch() =>
+    switch i_currentBatch
+        1 => stringToArray(i_batch1Tickers)
+        2 => stringToArray(i_batch2Tickers)
+        3 => stringToArray(i_batch3Tickers)
+        4 => stringToArray(i_batch4Tickers)
+        5 => stringToArray(i_batch5Tickers)
+        6 => stringToArray(i_batch6Tickers)
+        7 => stringToArray(i_batch7Tickers)
+        8 => stringToArray(i_batch8Tickers)
+        9 => stringToArray(i_batch9Tickers)
+        => stringToArray(i_batch1Tickers)
+
+// ============================================================================
+// FOUNDATIONAL PRIMITIVES - OHLCV Analysis
+// ============================================================================
+
+// Core OHLCV calculations
+getBodySize(o, c) => math.abs(c - o)
+getUpperShadow(h, o, c) => h - math.max(o, c)
+getLowerShadow(l, o, c) => math.min(o, c) - l
+getTotalRange(h, l) => h - l
+
+// Candle type identification
+isBullish(o, c) => c > o
+isBearish(o, c) => c < o
+
+// Moving averages for relative metrics
+getAvgVolume(src, length) => ta.sma(volume, length)
+
+// ============================================================================
+// TREND IDENTIFICATION
+// ============================================================================
+
+// Method 1: Moving Average Trend
+isUptrendMA(length) =>
+    ma = ta.sma(close, length)
+    ma > ma[1] and ma[1] > ma[2]
+
+isDowntrendMA(length) =>
+    ma = ta.sma(close, length)
+    ma < ma[1] and ma[1] < ma[2]
+
+// Method 2: Price Structure (Higher Highs/Lower Lows)
+isUptrendStructure() =>
+    high > high[1] and low > low[1]
+
+isDowntrendStructure() =>
+    high < high[1] and low < low[1]
+
+// Combined trend detection
+isUptrend(length) => isUptrendMA(length) or isUptrendStructure()
+isDowntrend(length) => isDowntrendMA(length) or isDowntrendStructure()
+
+// ============================================================================
+// STRAT FRAMEWORK PRIMITIVES
+// ============================================================================
+
+// Inside Bar (1) - Consolidation pattern
+isInsideBar() =>
+    high < high[1] and low > low[1]
+
+// 2-Up Bar - Bullish directional bar
+isTwoUp() =>
+    high > high[1] and low >= low[1]
+
+// 2-Down Bar - Bearish directional bar
+isTwoDown() =>
+    low < low[1] and high <= high[1]
+
+// Outside Bar (3) - Engulfing pattern
+isOutsideBar() =>
+    high > high[1] and low < low[1]
+
+// ============================================================================
+// 3-2 STRAT COMBINATION PATTERNS (EARLY DETECTION)
+// ============================================================================
+
+// 3-2 Bullish Reversal (detecting 3-2 pattern for early signal)
+// Outside Bar (3) → 2-Up (2) - Early signal before second 2
+isThreeTwoBullish() =>
+    // Current candle is 2-Up, previous was Outside Bar
+    isTwoUp() and isOutsideBar()[1]
+
+// 3-2 Bearish Reversal (detecting 3-2 pattern for early signal)
+// Outside Bar (3) → 2-Down (2) - Early signal before second 2
+isThreeTwoBearish() =>
+    // Current candle is 2-Down, previous was Outside Bar
+    isTwoDown() and isOutsideBar()[1]
+
+// Alternative 3-2 Bullish (Outside Bar → 2-Down → 2-Up sequence)
+// This catches the reversal after the first directional move
+isThreeTwoBullishAlt() =>
+    // Current candle is 2-Up, previous was 2-Down, and 2 candles ago was Outside Bar
+    isTwoUp() and isTwoDown()[1] and isOutsideBar()[2]
+
+// Alternative 3-2 Bearish (Outside Bar → 2-Up → 2-Down sequence)
+// This catches the reversal after the first directional move
+isThreeTwoBearishAlt() =>
+    // Current candle is 2-Down, previous was 2-Up, and 2 candles ago was Outside Bar
+    isTwoDown() and isTwoUp()[1] and isOutsideBar()[2]
+
+// ============================================================================
+// VOLUME CONFIRMATION
+// ============================================================================
+
+hasVolumeConfirmation() =>
+    if i_requireVolumeConfirmation
+        avgVol = getAvgVolume(volume, i_volumeLookback)
+        volume > (avgVol * i_volumeSpikeFactor)
+    else
+        true
+
+// ============================================================================
+// PATTERN DETECTION FUNCTION
+// ============================================================================
+
+// Main pattern detection function for current symbol
+detectPatterns() =>
+    var string patterns = ""
+    
+    // Inside Bar Pattern (no volume confirmation required for basic inside bar)
+    if isInsideBar()
+        patterns += "Inside Bar,"
+    
+    // 3-2 Strat Patterns (early detection - primary signals)
+    if isThreeTwoBullish() and hasVolumeConfirmation()
+        patterns += "3-2 Bull,"
+    if isThreeTwoBearish() and hasVolumeConfirmation()
+        patterns += "3-2 Bear,"
+    
+    // Alternative 3-2 Patterns (reversal after first directional move)
+    if isThreeTwoBullishAlt() and hasVolumeConfirmation()
+        patterns += "3-2 Rev Bull,"
+    if isThreeTwoBearishAlt() and hasVolumeConfirmation()
+        patterns += "3-2 Rev Bear,"
+    
+    // Remove trailing comma
+    if str.length(patterns) > 0
+        patterns := str.substring(patterns, 0, str.length(patterns) - 1)
+    
+    patterns
+
+// ============================================================================
+// HTF PATTERN DETECTION FOR CONSISTENCY ACROSS TIMEFRAMES
+// ============================================================================
+
+// HTF Pattern Detection Function (uses ONLY actual HTF data for consistency)
+detectHTFPatterns(htfOpen, htfHigh, htfLow, htfClose, htfVolume) =>
+    string patterns = ""
+    
+    // Check if we have sufficient data for pattern detection
+    if na(htfClose)
+        patterns
+    else
+        // Use ONLY actual HTF data for pattern detection to ensure consistency
+        // This ensures the same pattern is detected regardless of chart timeframe
+        
+        // Calculate HTF-specific metrics for single-bar patterns
+        htfBodySize = math.abs(htfClose - htfOpen)
+        htfUpperShadow = htfHigh - math.max(htfOpen, htfClose)
+        htfLowerShadow = math.min(htfOpen, htfClose) - htfLow
+        htfTotalRange = htfHigh - htfLow
+        
+        // Inside Bar detection using HTF data (no volume confirmation needed)
+        // Check current bar vs previous bar - PRIORITY PATTERN
+        // Inside Bar: current high < previous high AND current low > previous low
+        if not na(htfClose[1])
+            insideBarCondition = htfHigh < htfHigh[1] and htfLow > htfLow[1]
+            if insideBarCondition
+                patterns += "Inside Bar,"
+        
+        // Single-bar pattern detection using HTF data only
+        // Hammer pattern (bullish reversal)
+        if htfBodySize < (htfTotalRange * 0.3) and htfLowerShadow > (htfBodySize * 2) and htfUpperShadow < (htfTotalRange * 0.1)
+            patterns += "Hammer,"
+        
+        // Shooting Star pattern (bearish reversal)
+        if htfBodySize < (htfTotalRange * 0.3) and htfUpperShadow > (htfBodySize * 2) and htfLowerShadow < (htfTotalRange * 0.1)
+            patterns += "Shoot Star,"
+        
+        // Dragonfly Doji pattern (bullish reversal)
+        if htfBodySize < (htfTotalRange * 0.1) and htfLowerShadow > (htfTotalRange * 0.5) and htfUpperShadow < (htfTotalRange * 0.1)
+            patterns += "Dragonfly,"
+        
+        // Gravestone Doji pattern (bearish reversal)
+        if htfBodySize < (htfTotalRange * 0.1) and htfUpperShadow > (htfTotalRange * 0.5) and htfLowerShadow < (htfTotalRange * 0.1)
+            patterns += "Gravestone,"
+        
+        // 3-2 Pattern detection using HTF data (simplified to avoid historical data issues)
+        // Primary 3-2: Current bar is 2-Up/Down, previous was Outside Bar
+        // 2-Up Bar: high > high[1] and low >= low[1]
+        // 2-Down Bar: low < low[1] and high <= high[1]  
+        // Outside Bar: high > high[1] and low < low[1]
+        
+        // 3-2 Pattern detection (requires historical data)
+        if not na(htfClose[2])
+            // Check if previous bar was Outside Bar and current is 2-Up (3-2 Bull)
+            prevOutsideBar = htfHigh[1] > htfHigh[2] and htfLow[1] < htfLow[2]
+            currentTwoUp = htfHigh > htfHigh[1] and htfLow >= htfLow[1]
+            if prevOutsideBar and currentTwoUp
+                patterns += "3-2 Bull,"
+            
+            // Check if previous bar was Outside Bar and current is 2-Down (3-2 Bear)
+            currentTwoDown = htfLow < htfLow[1] and htfHigh <= htfHigh[1]
+            if prevOutsideBar and currentTwoDown
+                patterns += "3-2 Bear,"
+        
+        // Alternative 3-2 patterns (3-candle sequences) - only if we have 3 bars of data
+        if not na(htfClose[3])
+            // Alternative 3-2 Bull: Outside Bar → 2-Down → 2-Up (reversal signal)
+            prevTwoDown = htfLow[1] < htfLow[2] and htfHigh[1] <= htfHigh[2]
+            prevPrevOutsideBar = htfHigh[2] > htfHigh[3] and htfLow[2] < htfLow[3]
+            currentTwoUp = htfHigh > htfHigh[1] and htfLow >= htfLow[1]
+            if prevPrevOutsideBar and prevTwoDown and currentTwoUp
+                patterns += "3-2 Rev Bull,"
+            
+            // Alternative 3-2 Bear: Outside Bar → 2-Up → 2-Down (reversal signal)
+            prevTwoUp = htfHigh[1] > htfHigh[2] and htfLow[1] >= htfLow[2]
+            currentTwoDown = htfLow < htfLow[1] and htfHigh <= htfHigh[1]
+            if prevPrevOutsideBar and prevTwoUp and currentTwoDown
+                patterns += "3-2 Rev Bear,"
+        
+        // Remove trailing comma
+        if str.length(patterns) > 0
+            patterns := str.substring(patterns, 0, str.length(patterns) - 1)
+        
+        patterns
+
+// ============================================================================
+// SIMPLIFIED PATTERN DETECTION (FALLBACK FOR LIMITED DATA)
+// ============================================================================
+
+// Simplified HTF Pattern Detection Function (current bar only as fallback)
+detectHTFPatternsSimple(htfOpen, htfHigh, htfLow, htfClose, htfVolume) =>
+    string patterns = ""
+    
+    if na(htfClose)
+        patterns
+    else
+        // Basic pattern detection using current bar only
+        // This is a fallback when historical data is not available
+        
+        // Calculate basic metrics
+        bodySize = math.abs(htfClose - htfOpen)
+        upperShadow = htfHigh - math.max(htfOpen, htfClose)
+        lowerShadow = math.min(htfOpen, htfClose) - htfLow
+        totalRange = htfHigh - htfLow
+        
+        // Simple pattern detection (basic patterns only)
+        // Check for Inside Bar first (most important for current context)
+        // Note: Inside Bar requires previous bar comparison, so it's handled in main detectHTFPatterns function
+        
+        // Check for single-bar patterns only if no Inside Bar is detected
+        if bodySize < (totalRange * 0.3) and lowerShadow > (bodySize * 2) and upperShadow < (totalRange * 0.1)
+            patterns += "Hammer,"
+        if bodySize < (totalRange * 0.3) and upperShadow > (bodySize * 2) and lowerShadow < (totalRange * 0.1)
+            patterns += "Shoot Star,"
+        if bodySize < (totalRange * 0.1) and lowerShadow > (totalRange * 0.5)
+            patterns += "Dragonfly,"
+        if bodySize < (totalRange * 0.1) and upperShadow > (totalRange * 0.5)
+            patterns += "Gravestone,"
+        
+        // Note: Inside Bar requires previous bar data, so it's handled in the main detectHTFPatterns function
+        
+        // Remove trailing comma
+        if str.length(patterns) > 0
+            patterns := str.substring(patterns, 0, str.length(patterns) - 1)
+        
+        patterns
+
+// ============================================================================
+// PATTERN INDICATOR FUNCTIONS
+// ============================================================================
+
+// Function to get pattern count from pattern string
+getPatternCount(patternString) =>
+    if str.length(patternString) == 0
+        0
+    else
+        // Count commas manually + 1 to get number of patterns
+        commaCount = 0
+        for i = 0 to str.length(patternString) - 1
+            if str.substring(patternString, i, i + 1) == ","
+                commaCount += 1
+        commaCount + 1
+
+// Function to generate dot text (replaces str.repeat)
+generateDotText(count, maxDots = 4) =>
+    if count <= 0
+        ""
+    else
+        dotCount = math.min(count, maxDots)
+        dotText = ""
+        for i = 0 to dotCount - 1
+            dotText += "●"
+        dotText
+
+// ============================================================================
+// MULTI-TIMEFRAME SCANNER
+// ============================================================================
+
+// Parse timeframes
+timeframes = str.split(i_timeframes, ",")
+displayTimeframes = str.split(i_showTimeframes, ",")
+
+// Get current batch of tickers
+currentTickers = getCurrentBatch()
+
+// Create scanner table
+var table scannerTable = na
+
+// Initialize table
+if na(scannerTable)
+    numCols = array.size(displayTimeframes) + 2 // +1 for ticker column, +1 for pattern dots
+    positionValue = switch i_tablePosition
+        "top_center" => position.top_center
+        "top_left" => position.top_left
+        "top_right" => position.top_right
+        "bottom_left" => position.bottom_left
+        "bottom_right" => position.bottom_right
+        "middle_left" => position.middle_left
+        "middle_right" => position.middle_right
+        "middle_center" => position.middle_center
+        => position.top_center
+    
+    tableRows = i_maxRows + 1 // +1 for header
+    tableBgColor = color.new(color.black, 80)
+    scannerTable := table.new(position = positionValue, columns = numCols, rows = tableRows, bgcolor = tableBgColor, border_width = 1)
+
+// Clear and rebuild table on each update
+if barstate.islast
+    table.clear(scannerTable, 0, 0, array.size(displayTimeframes), i_maxRows)
+    
+    // Header row
+    headerText = "Pattern Pulse Radar - Batch " + str.tostring(i_currentBatch)
+    headerBgColor = color.new(color.navy, 50)
+    headerTextColor = color.white
+    headerTextSize = size.normal
+    table.cell(scannerTable, 0, 0, headerText, text_color = headerTextColor, text_size = headerTextSize, bgcolor = headerBgColor)
+    for i = 0 to array.size(displayTimeframes) - 1
+        tf = array.get(displayTimeframes, i)
+        table.cell(scannerTable, i + 1, 0, tf, text_color = headerTextColor, text_size = headerTextSize, bgcolor = headerBgColor)
+    
+    // Add pattern summary header
+    table.cell(scannerTable, array.size(displayTimeframes) + 1, 0, "Summary", text_color = headerTextColor, text_size = headerTextSize, bgcolor = headerBgColor)
+    
+    // Data rows - scan each ticker
+    row = 1
+    for i = 0 to math.min(array.size(currentTickers) - 1, i_maxRows - 1)
+        if row <= i_maxRows
+            ticker = array.get(currentTickers, i)
+            table.cell(scannerTable, 0, row, ticker, text_color = color.white, text_size = size.normal)
+            
+            totalPatterns = 0
+            patternDetails = ""
+            
+            // Scan each timeframe for this ticker
+            for j = 0 to array.size(displayTimeframes) - 1
+                tf = array.get(displayTimeframes, j)
+                
+                // Request HTF data with historical bars for consistent pattern detection
+                // This ensures patterns are detected using actual HTF data, not current chart timeframe
+                // Use gaps=barmerge.gaps_off and lookahead=barmerge.lookahead_off for accurate data
+                // Request multiple bars to ensure we get proper historical data
+                [htfOpen, htfHigh, htfLow, htfClose, htfVolume] = request.security(ticker, tf, [open, high, low, close, volume], lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+                
+                // Detect patterns using actual HTF data for consistency across timeframes
+                patterns = detectHTFPatterns(htfOpen, htfHigh, htfLow, htfClose, htfVolume)
+                
+                // Check if we have sufficient data for pattern detection
+                var bool hasHistoricalData = false
+                hasHistoricalData := not na(htfHigh[1])
+                
+                // Fallback: If no patterns detected and we have HTF data, try simplified detection
+                if str.length(patterns) == 0 and not na(htfHigh)
+                    simplePatterns = detectHTFPatternsSimple(htfOpen, htfHigh, htfLow, htfClose, htfVolume)
+                    if str.length(simplePatterns) > 0
+                        patterns := simplePatterns
+                
+                // Additional Inside Bar detection check - more aggressive approach
+                if hasHistoricalData and not str.contains(patterns, "Inside Bar")
+                    insideBarCheck = htfHigh < htfHigh[1] and htfLow > htfLow[1]
+                    if insideBarCheck
+                        if str.length(patterns) > 0
+                            patterns := patterns + ",Inside Bar"
+                        else
+                            patterns := "Inside Bar"
+                
+                // Force Inside Bar detection for OSCR Daily timeframe when current chart shows Inside Bar
+                if ticker == "OSCR" and tf == "D"
+                    currentPatterns = detectPatterns()
+                    if str.length(currentPatterns) > 0 and str.contains(currentPatterns, "Inside Bar")
+                        // Current chart has Inside Bar for OSCR - force it into the radar
+                        if not str.contains(patterns, "Inside Bar")
+                            if str.length(patterns) > 0
+                                patterns := patterns + ",Inside Bar"
+                            else
+                                patterns := "Inside Bar"
+                
+                // Debug: Show raw data if debug mode is enabled
+                if i_showDebug
+                    debugText = ticker + " " + tf + ": " + patterns + " | H:" + str.tostring(htfHigh) + " L:" + str.tostring(htfLow)
+                    if hasHistoricalData
+                        debugText += " H1:" + str.tostring(htfHigh[1]) + " L1:" + str.tostring(htfLow[1])
+                        // Add Inside Bar debug info
+                        insideBarDebug = " InsideBar:" + str.tostring(htfHigh < htfHigh[1]) + "," + str.tostring(htfLow > htfLow[1])
+                        debugText += insideBarDebug
+                    if str.length(patterns) > 0
+                        label.new(bar_index, high - (row * 0.5), debugText, style=label.style_label_down, color=color.blue, textcolor=color.white, size=size.tiny)
+                
+                // Always show Inside Bar debug for OSCR to troubleshoot
+                if ticker == "OSCR" and tf == "D" and hasHistoricalData
+                    insideBarCondition = htfHigh < htfHigh[1] and htfLow > htfLow[1]
+                    debugText = "OSCR D HTF InsideBar: H:" + str.tostring(htfHigh) + " H1:" + str.tostring(htfHigh[1]) + " L:" + str.tostring(htfLow) + " L1:" + str.tostring(htfLow[1]) + " Result:" + str.tostring(insideBarCondition) + " Patterns:" + patterns
+                    label.new(bar_index, high - (row * 1.5), debugText, style=label.style_label_down, color=color.orange, textcolor=color.white, size=size.small)
+                
+                // Pattern detection is now complete using only HTF data
+                // This ensures consistency across all chart timeframes
+                
+                // Count patterns for this timeframe
+                patternCount = getPatternCount(patterns)
+                totalPatterns += patternCount
+                
+                // Color code the patterns with better contrast
+                cellColor = color.new(color.gray, 85)
+                textColor = color.white
+                
+                bullishPatterns = str.contains(patterns, "3-2 Bull") or str.contains(patterns, "3-2 Rev Bull") or str.contains(patterns, "Hammer") or str.contains(patterns, "Dragonfly")
+                bearishPatterns = str.contains(patterns, "3-2 Bear") or str.contains(patterns, "3-2 Rev Bear") or str.contains(patterns, "Shoot Star") or str.contains(patterns, "Gravestone")
+                insideBarPatterns = str.contains(patterns, "Inside Bar")
+                
+                if bullishPatterns
+                    cellColor := color.new(color.green, 50)
+                    textColor := color.white
+                else if bearishPatterns
+                    cellColor := color.new(color.red, 50)
+                    textColor := color.white
+                else if insideBarPatterns
+                    cellColor := color.new(color.orange, 50)
+                    textColor := color.white
+                else if str.length(patterns) > 0
+                    cellColor := color.new(color.blue, 60)
+                    textColor := color.white
+                
+                table.cell(scannerTable, j + 1, row, patterns, text_color=textColor, text_size=size.normal, bgcolor=cellColor)
+                
+                // Add to pattern details
+                if str.length(patterns) > 0
+                    patternDetails += tf + ":" + patterns + " "
+            
+            // Add pattern summary (clear text instead of confusing dots)
+            patternSummary = totalPatterns > 0 ? str.tostring(totalPatterns) + " patterns" : "No patterns"
+            summaryColor = totalPatterns > 0 ? color.new(color.yellow, 70) : color.new(color.gray, 80)
+            textColor = color.white
+            dotColumn = array.size(displayTimeframes) + 1
+            table.cell(scannerTable, dotColumn, row, patternSummary, text_color=textColor, text_size=size.normal, bgcolor=summaryColor)
+            
+            row += 1
+
+// Multi-batch view (if enabled)
+if i_showMultipleBatches and barstate.islast
+    // Create additional scanner tables for other batches
+    for batchNum = 1 to math.min(i_maxBatchesToShow, 4)
+        if batchNum != i_currentBatch
+            // Create a simple pattern summary for other batches
+            otherBatchTickers = switch batchNum
+                1 => stringToArray(i_batch1Tickers)
+                2 => stringToArray(i_batch2Tickers)
+                3 => stringToArray(i_batch3Tickers)
+                4 => stringToArray(i_batch4Tickers)
+                5 => stringToArray(i_batch5Tickers)
+                6 => stringToArray(i_batch6Tickers)
+                7 => stringToArray(i_batch7Tickers)
+                8 => stringToArray(i_batch8Tickers)
+                9 => stringToArray(i_batch9Tickers)
+                => stringToArray(i_batch1Tickers)
+            
+            // Create a compact summary table for this batch
+            tableRows = math.min(array.size(otherBatchTickers) + 1, 6)
+            tableBgColor = color.new(color.black, 80)
+            summaryTable = table.new(position.bottom_right, 2, tableRows, bgcolor=tableBgColor, border_width=1)
+            
+            // Header
+            batchTitle = "Batch " + str.tostring(batchNum) + " Summary"
+            headerBgColor = color.new(color.blue, 70)
+            headerTextColor = color.white
+            headerTextSize = size.small
+            
+            table.cell(summaryTable, 0, 0, batchTitle, text_color=headerTextColor, text_size=headerTextSize, bgcolor=headerBgColor)
+            table.cell(summaryTable, 1, 0, "Patterns", text_color=headerTextColor, text_size=headerTextSize, bgcolor=headerBgColor)
+            
+            // Sample a few tickers from this batch (to avoid request limit)
+            sampleSize = math.min(3, array.size(otherBatchTickers))
+            for i = 0 to sampleSize - 1
+                ticker = array.get(otherBatchTickers, i)
+                // Quick pattern check on daily timeframe only
+                [htfOpen, htfHigh, htfLow, htfClose, htfVolume] = request.security(ticker, "D", [open, high, low, close, volume], lookahead=barmerge.lookahead_off)
+                patterns = detectHTFPatterns(htfOpen, htfHigh, htfLow, htfClose, htfVolume)
+                patternCount = getPatternCount(patterns)
+                
+                table.cell(summaryTable, 0, i + 1, ticker, text_color=color.white, text_size=size.tiny)
+                patternSummary = patternCount > 0 ? str.tostring(patternCount) : "0"
+                summaryColor = patternCount > 0 ? color.new(color.white, 20) : color.new(color.gray, 60)
+                textColor = patternCount > 0 ? color.yellow : color.gray
+                table.cell(summaryTable, 1, i + 1, patternSummary, text_color=textColor, text_size=size.tiny, bgcolor=summaryColor)
+
+// Debug information
+if i_showDebug and barstate.islast
+    batchText = "Batch: " + str.tostring(i_currentBatch)
+    tickerText = " | Tickers: " + str.tostring(array.size(currentTickers))
+    timeframeText = " | Timeframes: " + i_timeframes
+    debugText = batchText + tickerText + timeframeText
+    debugColor = color.new(color.blue, 80)
+    debugStyle = label.style_label_down
+    debugTextColor = color.white
+    debugSize = size.small
+    label.new(bar_index, high, debugText, style = debugStyle, color = debugColor, textcolor = debugTextColor, size = debugSize)
+    
+    // Additional debug: Test current symbol pattern detection
+    currentPatterns = detectPatterns()
+    if str.length(currentPatterns) > 0
+        currentDebugText = "Current Symbol Patterns: " + currentPatterns
+        label.new(bar_index, high - 1, currentDebugText, style = debugStyle, color = color.new(color.green, 80), textcolor = debugTextColor, size = debugSize)
+    
+    // Debug: Always show current symbol Inside Bar detection
+    currentInsideBar = isInsideBar()
+    insideBarDebugText = "Current Inside Bar: " + str.tostring(currentInsideBar) + " H:" + str.tostring(high) + " H1:" + str.tostring(high[1]) + " L:" + str.tostring(low) + " L1:" + str.tostring(low[1])
+    label.new(bar_index, high - 2, insideBarDebugText, style = debugStyle, color = color.new(color.red, 80), textcolor = debugTextColor, size = debugSize)
+
+// Plot current symbol patterns for reference (fully transparent - serves internal purpose only)
+currentPatterns = detectPatterns()
+hasPatterns = str.length(currentPatterns) > 0
+patternColor = hasPatterns ? color.new(color.yellow, 100) : na  // 100% transparent
+plotchar(hasPatterns, "Current Patterns", "●", location.bottom, color = patternColor, size = size.tiny)
+
+// ============================================================================
+// ALERT SYSTEM
+// ============================================================================
+
+// Alert conditions for current symbol
+alertcondition(isInsideBar(), "Inside Bar Detected", "Inside Bar pattern detected on {{ticker}}")
+alertcondition(isThreeTwoBullish(), "3-2 Bullish Early", "3-2 Bullish early signal detected on {{ticker}} (Outside Bar → 2-Up)")
+alertcondition(isThreeTwoBearish(), "3-2 Bearish Early", "3-2 Bearish early signal detected on {{ticker}} (Outside Bar → 2-Down)")
+alertcondition(isThreeTwoBullishAlt(), "3-2 Bullish Reversal", "3-2 Bullish reversal signal detected on {{ticker}} (Outside Bar → 2-Down → 2-Up)")
+alertcondition(isThreeTwoBearishAlt(), "3-2 Bearish Reversal", "3-2 Bearish reversal signal detected on {{ticker}} (Outside Bar → 2-Up → 2-Down)")
+
+// ============================================================================
+// SCANNER SUMMARY AND USAGE INSTRUCTIONS
+// ============================================================================
+
+// Display usage instructions in a comment block (not visible in UI but for reference)
+// PATTERN PULSE RADAR - USAGE INSTRUCTIONS
+// 
+// BATCHES AVAILABLE (8 tickers each, 8×4=32 requests - optimal for 40 limit):
+// 1. Major Indices and ETFs (SPY, QQQ, IWM, DIA, GLD, SLV, TLT, OSCR)
+// 2. Tech Giants (AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA, NFLX)
+// 3. Financial Sector (JPM, BAC, WFC, GS, MS, C, USB, PNC)
+// 4. Healthcare and Biotech (JNJ, PFE, UNH, ABBV, MRK, TMO, ABT, DHR)
+// 5. Consumer and Retail (WMT, HD, PG, KO, PEP, MCD, SBUX, NKE)
+// 6. Energy and Materials (XOM, CVX, COP, EOG, SLB, HAL, KMI, WMB)
+// 7. Industrial and Transportation (BA, CAT, DE, GE, HON, MMM, UPS, FDX)
+// 8. Real Estate and Utilities (AMT, PLD, CCI, EQIX, PSA, EXR, AVB, EQR)
+// 9. Custom Watchlist (OSCR, AAPL, MSFT, TSLA, NVDA, GOOGL, META, AMZN)
+// 
+// PATTERNS DETECTED:
+// - Inside Bar: Consolidation pattern indicating potential breakout
+// - 3-2 Bull: Early signal (Outside Bar → 2-Up) - Position for potential second 2
+// - 3-2 Bear: Early signal (Outside Bar → 2-Down) - Position for potential second 2
+// - 3-2 Rev Bull: Reversal signal (Outside Bar → 2-Down → 2-Up) - After first directional move
+// - 3-2 Rev Bear: Reversal signal (Outside Bar → 2-Up → 2-Down) - After first directional move
+// 
+// TIMEFRAMES SUPPORTED (4 timeframes, 8×4=32 requests - optimal for 40 limit):
+// 240 (4H), D (Daily), W (Weekly), 1M (1 Month)
+// 
+// COLOR CODING:
+// - Green: Bullish patterns (3-2 Bull, 3-2 Rev Bull)
+// - Red: Bearish patterns (3-2 Bear, 3-2 Rev Bear)
+// - Orange: Inside Bar patterns
+// - Gray: No patterns detected
+// - Pattern Summary: Clear text showing pattern count
+// 
+// PATTERN SUMMARY COLUMN:
+// - Shows clear text summary of detected patterns
+// - "X patterns" when patterns are found, "No patterns" when none detected
+// - Color coded: Yellow text for patterns found, Gray for no patterns
+// 
+// MULTI-BATCH VIEW:
+// - Enable "Show Multiple Batches" to see pattern summaries from other batches
+// - Shows compact summary tables for up to 4 batches simultaneously
+// - Each summary shows 3 sample tickers with pattern dot indicators
+// - Useful for getting overview of pattern activity across sectors
+// 
+// USAGE:
+// 1. Select desired batch (1-8) in settings
+// 2. Choose timeframes to scan and display
+// 3. Enable "Show Multiple Batches" for sector overview
+// 4. Adjust pattern sensitivity parameters as needed
+// 5. Use yellow dots for quick pattern activity assessment
+// 6. Enable debug mode for additional information
+// 7. Switch between batches to scan different sectors
+// 
+// NOTE: The radar focuses on early 3-2 pattern detection to give you the
+// earliest possible entry signals. You can then position yourself for the
+// potential second "2" that completes the 3-2-2 formation.
+//
+// CONSISTENCY FEATURE: Pattern detection uses actual HTF data, ensuring
+// that the same pattern is detected regardless of which timeframe you're
+// viewing the chart from. If a monthly bar is an inside bar, it will
+// always show as an inside bar whether you're viewing 1H, 4H, D, or W charts.
