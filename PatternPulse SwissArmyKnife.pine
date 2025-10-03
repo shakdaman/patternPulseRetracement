@@ -92,12 +92,12 @@ rsi_len = input.int(14, "RSI Length", group=data_group)
 atr_ray_group = "ATR Ray Settings"
 show_live_atr = input.bool(false, "Live ATR", group=atr_ray_group, tooltip="Real-time ATR levels based on current bar's close + current ATR. Updates dynamically as price moves. Best for active trading and real-time analysis.")
 live_atr_color = input.color(color.new(color.aqua, 20), "Color", group=atr_ray_group, inline="live_atr")
-live_atr_style_str = input.string("Dotted", "Style", options=["Solid", "Dotted", "Dashed"], group=atr_ray_group, inline="live_atr")
+live_atr_style_str = input.string("Solid", "Style", options=["Solid", "Dotted", "Dashed"], group=atr_ray_group, inline="live_atr")
 live_atr_width = input.int(1, "Width", minval=1, group=atr_ray_group, inline="live_atr")
 show_static_atr = input.bool(true, "Static ATR", group=atr_ray_group, tooltip="Fixed ATR levels based on previous bar's close + previous ATR. Provides consistent reference points that don't change during the current bar. Best for planning and analysis.")
 static_atr_color = input.color(color.new(color.yellow, 20), "Color", group=atr_ray_group, inline="static_atr")
-static_atr_style_str = input.string("Dashed", "Style", options=["Solid", "Dotted", "Dashed"], group=atr_ray_group, inline="static_atr")
-static_atr_width = input.int(2, "Width", minval=1, group=atr_ray_group, inline="static_atr")
+static_atr_style_str = input.string("Solid", "Style", options=["Solid", "Dotted", "Dashed"], group=atr_ray_group, inline="static_atr")
+static_atr_width = input.int(1, "Width", minval=1, group=atr_ray_group, inline="static_atr")
 atr_label_offset = input.int(10, "Label Offset", group=atr_ray_group, tooltip="Number of bars to offset the ATR labels. Increase to move labels further right and prevent overlapping.")
 
 // --- CALCULATIONS ---
@@ -256,9 +256,9 @@ if barstate.islast
         static_upper_label_text = "Static ATR: " + str.tostring(static_upper_level, format.mintick)
         static_lower_label_text = "Static ATR: " + str.tostring(static_lower_level, format.mintick)
         staticUpperAtrLine := line.new(time[1], static_upper_level, time, static_upper_level, xloc = xloc.bar_time, extend=extend.both, color=static_atr_color, style=f_getLineStyle(static_atr_style_str), width=static_atr_width)
-        staticUpperAtrLabel := label.new(atr_label_offset_time, static_upper_level, static_upper_label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(static_atr_color, 20), textcolor=color.white, size=size.small)
+        staticUpperAtrLabel := label.new(atr_label_offset_time, static_upper_level, static_upper_label_text, xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(static_atr_color, 20), textcolor=color.white, size=size.small)
         staticLowerAtrLine := line.new(time[1], static_lower_level, time, static_lower_level, xloc = xloc.bar_time, extend=extend.both, color=static_atr_color, style=f_getLineStyle(static_atr_style_str), width=static_atr_width)
-        staticLowerAtrLabel := label.new(atr_label_offset_time, static_lower_level, static_lower_label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(static_atr_color, 20), textcolor=color.white, size=size.small)
+        staticLowerAtrLabel := label.new(atr_label_offset_time, static_lower_level, static_lower_label_text, xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(static_atr_color, 20), textcolor=color.white, size=size.small)
     else
         // Delete lines when toggles are off
         line.delete(staticUpperAtrLine[1]), label.delete(staticUpperAtrLabel[1]), line.delete(staticLowerAtrLine[1]), label.delete(staticLowerAtrLabel[1])
@@ -273,9 +273,9 @@ if barstate.islast
         live_upper_label_text = "Live ATR: " + str.tostring(live_upper_level, format.mintick)
         live_lower_label_text = "Live ATR: " + str.tostring(live_lower_level, format.mintick)
         liveUpperAtrLine := line.new(time, live_upper_level, time + 1, live_upper_level, xloc = xloc.bar_time, extend=extend.both, color=live_atr_color, style=f_getLineStyle(live_atr_style_str), width=live_atr_width)
-        liveUpperAtrLabel := label.new(atr_label_offset_time, live_upper_level, live_upper_label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_right, color=color.new(live_atr_color, 20), textcolor=color.white, size=size.small)
+        liveUpperAtrLabel := label.new(atr_label_offset_time, live_upper_level, live_upper_label_text, xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(live_atr_color, 20), textcolor=color.white, size=size.small)
         liveLowerAtrLine := line.new(time, live_lower_level, time + 1, live_lower_level, xloc = xloc.bar_time, extend=extend.both, color=live_atr_color, style=f_getLineStyle(live_atr_style_str), width=live_atr_width)
-        liveLowerAtrLabel := label.new(atr_label_offset_time, live_lower_level, live_lower_label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_right, color=color.new(live_atr_color, 20), textcolor=color.white, size=size.small)
+        liveLowerAtrLabel := label.new(atr_label_offset_time, live_lower_level, live_lower_label_text, xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(live_atr_color, 20), textcolor=color.white, size=size.small)
     else
         // Delete lines when toggles are off
         line.delete(liveUpperAtrLine[1]), label.delete(liveUpperAtrLabel[1]), line.delete(liveLowerAtrLine[1]), label.delete(liveLowerAtrLabel[1])
@@ -284,19 +284,19 @@ if barstate.islast
     if g_show_current_opens
         if show_current_day_open
             cdoLine := line.new(time[1], current_day_open, time, current_day_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cdoLabel := label.new(cpo_label_offset_time, current_day_open, "Current Day Open", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cdoLabel := label.new(cpo_label_offset_time, current_day_open, "Current Day Open", xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
         if show_current_week_open
             cwoLine := line.new(time[1], current_week_open, time, current_week_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cwoLabel := label.new(cpo_label_offset_time, current_week_open, "Current Week Open", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cwoLabel := label.new(cpo_label_offset_time, current_week_open, "Current Week Open", xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
         if show_current_month_open
             cmoLine := line.new(time[1], current_month_open, time, current_month_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cmoLabel := label.new(cpo_label_offset_time, current_month_open, "Current Month Open", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cmoLabel := label.new(cpo_label_offset_time, current_month_open, "Current Month Open", xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
         if show_current_quarter_open
             cqoLine := line.new(time[1], current_quarter_open, time, current_quarter_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cqoLabel := label.new(cpo_label_offset_time, current_quarter_open, "Current Quarter Open", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cqoLabel := label.new(cpo_label_offset_time, current_quarter_open, "Current Quarter Open", xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
         if show_current_year_open
             cyoLine := line.new(time[1], current_year_open, time, current_year_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cyoLabel := label.new(cpo_label_offset_time, current_year_open, "Current Year Open", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cyoLabel := label.new(cpo_label_offset_time, current_year_open, "Current Year Open", xloc=xloc.bar_time, yloc=yloc.above_center, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
 
 // --- ON-SCREEN DATA DISPLAY TABLE ---
 var table infoPanel = table.new(position.middle_left, 1, 2, bgcolor = color.new(color.gray, 80), border_width = 1)
