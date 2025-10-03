@@ -111,11 +111,12 @@ bb_upper = bb_basis + bb_dev
 bb_lower = bb_basis - bb_dev
 atr_val = ta.atr(atr_len)
 rsi_val = ta.rsi(close, rsi_len)
-current_day_open = request.security(syminfo.tickerid, "D", open, lookahead=barmerge.lookahead_on)
-current_week_open = request.security(syminfo.tickerid, "W", open, lookahead=barmerge.lookahead_on)
-current_month_open = request.security(syminfo.tickerid, "M", open, lookahead=barmerge.lookahead_on)
-current_quarter_open = request.security(syminfo.tickerid, "3M", open, lookahead=barmerge.lookahead_on)
-current_year_open = request.security(syminfo.tickerid, "12M", open, lookahead=barmerge.lookahead_on)
+// Current period opens - using lookahead_off to get current period open prices
+current_day_open = request.security(syminfo.tickerid, "D", open, lookahead=barmerge.lookahead_off)
+current_week_open = request.security(syminfo.tickerid, "W", open, lookahead=barmerge.lookahead_off)
+current_month_open = request.security(syminfo.tickerid, "M", open, lookahead=barmerge.lookahead_off)
+current_quarter_open = request.security(syminfo.tickerid, "3M", open, lookahead=barmerge.lookahead_off)
+current_year_open = request.security(syminfo.tickerid, "12M", open, lookahead=barmerge.lookahead_off)
 
 // --- BROADENING FORMATION CALCULATION ---
 var line upperTrendLine = na
