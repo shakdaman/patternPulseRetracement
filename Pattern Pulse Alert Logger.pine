@@ -1,0 +1,470 @@
+//@version=6
+indicator("Pattern Pulse Alert Logger", shorttitle="Pattern Pulse D&R Logger", overlay=false)
+
+// --- Input Controls ---
+i_maxAlerts = input.int(50, "Maximum Alert History", minval=10, maxval=200, tooltip="Maximum number of alerts to keep in history")
+i_tablePosition = input.string("top_right", "Table Position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"])
+i_tableSize = input.string("normal", "Table Text Size", options=["tiny", "small", "normal", "large"])
+i_showTimestamp = input.bool(true, "Show Timestamps")
+i_autoScroll = input.bool(true, "Auto-scroll to Latest")
+
+// --- Multi-Ticker Monitoring (Optimized for Request Limits) ---
+// PERFORMANCE NOTE: Pine Script has a 40 request.security() limit
+// With 3 tickers × 4 timeframes = 12 HTF requests + 3 current price requests = 15 total requests
+// This leaves room for additional tickers if needed
+i_monitorTickers = input.string("AAPL,SPY,QQQ", "Tickers to Monitor", tooltip="Comma-separated list of tickers to monitor (e.g., AAPL,SPY,QQQ). Limit to 3 tickers to avoid request limit.")
+i_includeCurrentTicker = input.bool(true, "Include Current Chart Ticker", tooltip="Also monitor the ticker of the current chart")
+i_limitTimeframes = input.bool(true, "Limit Timeframes (Performance)", tooltip="Only monitor 4H, Daily, Weekly, Monthly to reduce request calls")
+
+// --- Filter Controls ---
+i_filterStates = input.string("", "Filter States (comma-separated)", tooltip="Enter state numbers to show (e.g., '1,2,5,6'). Leave empty to show all.")
+i_filterTimeframes = input.string("", "Filter Timeframes (comma-separated)", tooltip="Enter timeframes to show (e.g., '4H,Daily,Weekly'). Leave empty to show all.")
+i_filterSymbols = input.string("", "Filter Symbols (comma-separated)", tooltip="Enter symbols to show (e.g., 'AAPL,SPY,QQQ'). Leave empty to show all.")
+
+// --- Alert Storage ---
+type AlertEntry
+    int timestamp
+    int time_ms
+    string symbol
+    string timeframe
+    int state
+    string stateDescription
+    string alertMessage
+
+var array<AlertEntry> alertHistory = array.new<AlertEntry>()
+var int lastProcessedBar = 0
+
+// --- State Description Function (copied from dashboard) ---
+f_getStateDescription(state) =>
+    switch state
+        0 => "Neutral"
+        1 => "Deviated Above"
+        2 => "Deviated Below"
+        3 => "Returned from Above"
+        4 => "Returned from Below"
+        5 => "Bullish 25%"
+        6 => "Bullish 50%"
+        7 => "Bullish 100%"
+        8 => "Bullish Fell 50%"
+        9 => "Bullish Fell 25%"
+        10 => "Bearish 25%"
+        11 => "Bearish 50%"
+        12 => "Bearish 100%"
+        13 => "Bearish Rose 50%"
+        14 => "Bearish Rose 25%"
+        => "Unknown"
+
+// --- State Color Function (copied from dashboard) ---
+f_getStateColor(state) =>
+    switch state
+        0 => color.gray
+        1 => color.blue
+        2 => color.orange
+        3 => color.purple
+        4 => color.purple
+        5 => color.new(color.green, 20)
+        6 => color.new(color.green, 0)
+        7 => color.new(color.lime, 0)
+        8 => color.new(color.green, 40)
+        9 => color.new(color.green, 60)
+        10 => color.new(color.red, 20)
+        11 => color.new(color.red, 0)
+        12 => color.new(color.maroon, 0)
+        13 => color.new(color.red, 40)
+        14 => color.new(color.red, 60)
+        => color.gray
+
+// --- Filtering Functions ---
+f_parseFilter(filterString) =>
+    if str.length(filterString) == 0
+        array.new<string>()
+    else
+        str.split(filterString, ",")
+
+f_matchesFilter(value, filterArray) =>
+    if array.size(filterArray) == 0
+        true
+    else
+        array.includes(filterArray, str.trim(value))
+
+// --- Ticker Management Functions ---
+f_getTickersToMonitor() =>
+    // Parse the input ticker string
+    inputTickers = f_parseFilter(i_monitorTickers)
+    
+    // Add current ticker if requested
+    finalTickers = array.copy(inputTickers)
+    if i_includeCurrentTicker and not array.includes(finalTickers, syminfo.ticker)
+        array.push(finalTickers, syminfo.ticker)
+    
+    finalTickers
+
+// --- Time Formatting Function ---
+f_formatTime(timeMs) =>
+    if na(timeMs)
+        "N/A"
+    else
+        // Convert to MM-DD-YY HH:MM format
+        // Using UTC time since Pine Script doesn't have easy timezone conversion
+        str.format_time(timeMs, "MM-dd-yy HH:mm", "UTC")
+
+// --- Multi-Ticker Data Structure ---
+type TickerData
+    string symbol
+    float htfHigh_4h
+    float htfLow_4h
+    float htfHigh_daily
+    float htfLow_daily
+    float htfHigh_weekly
+    float htfLow_weekly
+    float htfHigh_monthly
+    float htfLow_monthly
+    float htfHigh_quarterly
+    float htfLow_quarterly
+    float htfHigh_3m
+    float htfLow_3m
+    float htfHigh_6m
+    float htfLow_6m
+    float htfHigh_1y
+    float htfLow_1y
+    int state_4h
+    int state_daily
+    int state_weekly
+    int state_monthly
+    int state_quarterly
+    int state_3m
+    int state_6m
+    int state_1y
+    int prevState_4h
+    int prevState_daily
+    int prevState_weekly
+    int prevState_monthly
+    int prevState_quarterly
+    int prevState_3m
+    int prevState_6m
+    int prevState_1y
+
+// --- Global Storage for All Tickers ---
+var array<TickerData> allTickerData = array.new<TickerData>()
+
+// --- Function to Get or Create Ticker Data ---
+f_getTickerData(symbol) =>
+    // Find existing data or create new
+    var tickerData = TickerData.new()
+    found = false
+    
+    // Only search if array is not empty
+    if array.size(allTickerData) > 0
+        for i = 0 to array.size(allTickerData) - 1
+            existingData = array.get(allTickerData, i)
+            if existingData.symbol == symbol
+                tickerData := existingData
+                found := true
+                break
+    
+    if not found
+        tickerData := TickerData.new()
+        tickerData.symbol := symbol
+        array.push(allTickerData, tickerData)
+    
+    tickerData
+
+// --- Function to Retrieve HTF Data for a Symbol ---
+f_getHTFData(symbol, timeframe) =>
+    symbolId = symbol == syminfo.ticker ? syminfo.tickerid : symbol
+    [htfHigh_raw, htfLow_raw, htfConfirmed] = request.security(symbolId, timeframe, [high, low, barstate.isconfirmed], lookahead=barmerge.lookahead_off)
+    [htfHigh_raw, htfLow_raw, htfConfirmed]
+
+// --- Function to Get Current Prices for a Symbol ---
+f_getCurrentPrices(symbol) =>
+    if symbol == syminfo.ticker
+        [high, low, close]
+    else
+        [currentHigh, currentLow, currentClose] = request.security(symbol, timeframe.period, [high, low, close], lookahead=barmerge.lookahead_off)
+        [currentHigh, currentLow, currentClose]
+
+// --- Simplified State Machine (copied from dashboard) ---
+f_getState(htfHigh, htfLow, currentHigh, currentLow, currentClose, currentState) =>
+    newState = currentState
+    
+    if htfHigh != htfHigh[1] or htfLow != htfLow[1]
+        newState := 0
+    else
+        switch currentState
+            0 => 
+                if currentHigh > htfHigh
+                    newState := 1
+                else if currentLow < htfLow
+                    newState := 2
+            1 => 
+                if currentClose < htfHigh
+                    newState := 3
+            2 => 
+                if currentClose > htfLow
+                    newState := 4
+            3 => 
+                if currentClose < htfLow
+                    newState := 10
+                else if currentClose > htfHigh
+                    newState := 1
+            4 => 
+                if currentClose > htfHigh
+                    newState := 5
+                else if currentClose < htfLow
+                    newState := 2
+            5 => 
+                if currentClose > htfHigh
+                    newState := 6
+                else if currentClose < htfLow
+                    newState := 9
+            6 => 
+                if currentClose > htfHigh
+                    newState := 7
+                else if currentClose < htfLow
+                    newState := 8
+            7 => 
+                if currentClose < htfHigh
+                    newState := 1
+            8 => 
+                if currentClose > htfHigh
+                    newState := 6
+                else if currentClose < htfLow
+                    newState := 9
+            9 => 
+                if currentClose > htfHigh
+                    newState := 5
+                else if currentClose < htfLow
+                    newState := 2
+            10 => 
+                if currentClose < htfLow
+                    newState := 11
+                else if currentClose > htfHigh
+                    newState := 14
+            11 => 
+                if currentClose < htfLow
+                    newState := 12
+                else if currentClose > htfHigh
+                    newState := 13
+            12 => 
+                if currentClose > htfHigh
+                    newState := 2
+            13 => 
+                if currentClose < htfLow
+                    newState := 11
+                else if currentClose > htfHigh
+                    newState := 14
+            14 => 
+                if currentClose < htfLow
+                    newState := 10
+                else if currentClose > htfHigh
+                    newState := 1
+        newState
+    
+    newState
+
+// --- Global Variables for Processing ---
+// Get list of tickers to monitor
+tickersToMonitor = f_getTickersToMonitor()
+
+// Timeframe arrays (optimized based on performance setting)
+timeframes = i_limitTimeframes ? array.from("240", "1D", "1W", "1M") : array.from("240", "1D", "1W", "1M", "3M", "3M", "6M", "12M")
+timeframeNames = i_limitTimeframes ? array.from("4H", "Daily", "Weekly", "Monthly") : array.from("4H", "Daily", "Weekly", "Monthly", "Quarterly", "3M", "6M", "1Y")
+
+// --- Main Processing Logic ---
+// Process each ticker
+for tickerIdx = 0 to array.size(tickersToMonitor) - 1
+    ticker = array.get(tickersToMonitor, tickerIdx)
+    tickerData = f_getTickerData(ticker)
+    
+    // Get current prices for this ticker
+    [currentHigh, currentLow, currentClose] = f_getCurrentPrices(ticker)
+    
+    for tfIdx = 0 to array.size(timeframes) - 1
+        tf = array.get(timeframes, tfIdx)
+        tfName = array.get(timeframeNames, tfIdx)
+        
+        // Get HTF data
+        [htfHigh_raw, htfLow_raw, htfConfirmed] = f_getHTFData(ticker, tf)
+        
+        // Update stored values if confirmed
+        if htfConfirmed and not na(htfHigh_raw) and not na(htfLow_raw)
+            switch tfIdx
+                0 => 
+                    tickerData.htfHigh_4h := htfHigh_raw
+                    tickerData.htfLow_4h := htfLow_raw
+                1 => 
+                    tickerData.htfHigh_daily := htfHigh_raw
+                    tickerData.htfLow_daily := htfLow_raw
+                2 => 
+                    tickerData.htfHigh_weekly := htfHigh_raw
+                    tickerData.htfLow_weekly := htfLow_raw
+                3 => 
+                    tickerData.htfHigh_monthly := htfHigh_raw
+                    tickerData.htfLow_monthly := htfLow_raw
+                4 => 
+                    tickerData.htfHigh_quarterly := htfHigh_raw
+                    tickerData.htfLow_quarterly := htfLow_raw
+                5 => 
+                    tickerData.htfHigh_3m := htfHigh_raw
+                    tickerData.htfLow_3m := htfLow_raw
+                6 => 
+                    tickerData.htfHigh_6m := htfHigh_raw
+                    tickerData.htfLow_6m := htfLow_raw
+                7 => 
+                    tickerData.htfHigh_1y := htfHigh_raw
+                    tickerData.htfLow_1y := htfLow_raw
+    
+    // Update states for each timeframe
+    tickerData.state_4h := f_getState(tickerData.htfHigh_4h, tickerData.htfLow_4h, currentHigh, currentLow, currentClose, tickerData.state_4h)
+    tickerData.state_daily := f_getState(tickerData.htfHigh_daily, tickerData.htfLow_daily, currentHigh, currentLow, currentClose, tickerData.state_daily)
+    tickerData.state_weekly := f_getState(tickerData.htfHigh_weekly, tickerData.htfLow_weekly, currentHigh, currentLow, currentClose, tickerData.state_weekly)
+    tickerData.state_monthly := f_getState(tickerData.htfHigh_monthly, tickerData.htfLow_monthly, currentHigh, currentLow, currentClose, tickerData.state_monthly)
+    tickerData.state_quarterly := f_getState(tickerData.htfHigh_quarterly, tickerData.htfLow_quarterly, currentHigh, currentLow, currentClose, tickerData.state_quarterly)
+    tickerData.state_3m := f_getState(tickerData.htfHigh_3m, tickerData.htfLow_3m, currentHigh, currentLow, currentClose, tickerData.state_3m)
+    tickerData.state_6m := f_getState(tickerData.htfHigh_6m, tickerData.htfLow_6m, currentHigh, currentLow, currentClose, tickerData.state_6m)
+    tickerData.state_1y := f_getState(tickerData.htfHigh_1y, tickerData.htfLow_1y, currentHigh, currentLow, currentClose, tickerData.state_1y)
+    
+    // Check for state changes and add to alert history
+    states = array.from(tickerData.state_4h, tickerData.state_daily, tickerData.state_weekly, tickerData.state_monthly, 
+                       tickerData.state_quarterly, tickerData.state_3m, tickerData.state_6m, tickerData.state_1y)
+    prevStates = array.from(tickerData.prevState_4h, tickerData.prevState_daily, tickerData.prevState_weekly, tickerData.prevState_monthly,
+                           tickerData.prevState_quarterly, tickerData.prevState_3m, tickerData.prevState_6m, tickerData.prevState_1y)
+    
+    for i = 0 to array.size(timeframes) - 1
+        currentState = array.get(states, i)
+        previousState = array.get(prevStates, i)
+        timeframe = array.get(timeframeNames, i)
+        
+        if currentState != previousState and not na(currentState) and not na(previousState)
+            // Create new alert entry
+            newAlert = AlertEntry.new()
+            newAlert.timestamp := bar_index
+            newAlert.time_ms := time
+            newAlert.symbol := ticker
+            newAlert.timeframe := timeframe
+            newAlert.state := currentState
+            newAlert.stateDescription := f_getStateDescription(currentState)
+            newAlert.alertMessage := timeframe + " State Change: " + ticker + " → " + f_getStateDescription(currentState)
+            
+            // Add to history (at the beginning for newest first)
+            array.unshift(alertHistory, newAlert)
+            
+            // Trim history if too long
+            if array.size(alertHistory) > i_maxAlerts
+                array.pop(alertHistory)
+    
+    // Update previous states for this ticker
+    tickerData.prevState_4h := tickerData.state_4h
+    tickerData.prevState_daily := tickerData.state_daily
+    tickerData.prevState_weekly := tickerData.state_weekly
+    tickerData.prevState_monthly := tickerData.state_monthly
+    tickerData.prevState_quarterly := tickerData.state_quarterly
+    tickerData.prevState_3m := tickerData.state_3m
+    tickerData.prevState_6m := tickerData.state_6m
+    tickerData.prevState_1y := tickerData.state_1y
+
+// --- Table Creation ---
+if barstate.islast
+    // Parse filters
+    stateFilter = f_parseFilter(i_filterStates)
+    timeframeFilter = f_parseFilter(i_filterTimeframes)
+    symbolFilter = f_parseFilter(i_filterSymbols)
+    
+    // Determine table position
+    tablePos = switch i_tablePosition
+        "top_left" => position.top_left
+        "top_center" => position.top_center
+        "top_right" => position.top_right
+        "middle_left" => position.middle_left
+        "middle_center" => position.middle_center
+        "middle_right" => position.middle_right
+        "bottom_left" => position.bottom_left
+        "bottom_center" => position.bottom_center
+        "bottom_right" => position.bottom_right
+        => position.top_right
+    
+    // Determine text size
+    textSize = switch i_tableSize
+        "tiny" => size.tiny
+        "small" => size.small
+        "normal" => size.normal
+        "large" => size.large
+        => size.normal
+    
+    // Filter alerts
+    filteredAlerts = array.new<AlertEntry>()
+    for i = 0 to array.size(alertHistory) - 1
+        alertEntry = array.get(alertHistory, i)
+        if f_matchesFilter(str.tostring(alertEntry.state), stateFilter) and
+           f_matchesFilter(alertEntry.timeframe, timeframeFilter) and
+           f_matchesFilter(alertEntry.symbol, symbolFilter)
+            array.push(filteredAlerts, alertEntry)
+    
+    // Create table
+    numRows = math.min(array.size(filteredAlerts), 20) + 2  // +2 for header and summary
+    if numRows > 2
+        var alertTable = table.new(tablePos, 4, numRows, bgcolor=color.new(color.black, 80), border_width=1)
+        table.clear(alertTable, 0, 0, 3, numRows - 1)
+        
+        // Header
+        table.cell(alertTable, 0, 0, "Pattern Pulse Alert Logger", text_color=color.white, text_size=textSize, bgcolor=color.new(color.navy, 50), text_halign=text.align_left)
+        table.merge_cells(alertTable, 0, 0, 3, 0)
+        
+        // Column headers
+        headerBg = color.new(color.gray, 70)
+        table.cell(alertTable, 0, 1, "Time", text_color=color.white, text_size=textSize, bgcolor=headerBg)
+        table.cell(alertTable, 1, 1, "Symbol/TF", text_color=color.white, text_size=textSize, bgcolor=headerBg)
+        table.cell(alertTable, 2, 1, "State", text_color=color.white, text_size=textSize, bgcolor=headerBg)
+        table.cell(alertTable, 3, 1, "Description", text_color=color.white, text_size=textSize, bgcolor=headerBg)
+        
+        // Alert rows
+        displayCount = math.min(array.size(filteredAlerts), 20)
+        for i = 0 to displayCount - 1
+            row = i + 2
+            alertEntry = array.get(filteredAlerts, i)
+            
+            // Time column
+            timeText = i_showTimestamp ? f_formatTime(alertEntry.time_ms) : ""
+            table.cell(alertTable, 0, row, timeText, text_color=color.white, text_size=textSize)
+            
+            // Symbol/Timeframe column
+            symbolTfText = alertEntry.symbol + "/" + alertEntry.timeframe
+            table.cell(alertTable, 1, row, symbolTfText, text_color=color.white, text_size=textSize)
+            
+            // State column
+            stateText = str.tostring(alertEntry.state)
+            stateColor = f_getStateColor(alertEntry.state)
+            table.cell(alertTable, 2, row, stateText, text_color=color.white, text_size=textSize, bgcolor=color.new(stateColor, 70))
+            
+            // Description column
+            table.cell(alertTable, 3, row, alertEntry.stateDescription, text_color=color.white, text_size=textSize)
+        
+        // Summary row
+        if array.size(filteredAlerts) > 20
+            summaryText = "Showing " + str.tostring(displayCount) + " of " + str.tostring(array.size(filteredAlerts)) + " alerts"
+            table.cell(alertTable, 0, numRows - 1, summaryText, text_color=color.yellow, text_size=textSize, bgcolor=color.new(color.gray, 80))
+            table.merge_cells(alertTable, 0, numRows - 1, 3, numRows - 1)
+        else
+            summaryText = "Total alerts: " + str.tostring(array.size(filteredAlerts))
+            table.cell(alertTable, 0, numRows - 1, summaryText, text_color=color.yellow, text_size=textSize, bgcolor=color.new(color.gray, 80))
+            table.merge_cells(alertTable, 0, numRows - 1, 3, numRows - 1)
+
+// --- Alerts (for external notification) ---
+// Trigger alerts when state changes occur for any ticker
+for tickerIdx = 0 to array.size(tickersToMonitor) - 1
+    ticker = array.get(tickersToMonitor, tickerIdx)
+    tickerData = f_getTickerData(ticker)
+    
+    states = array.from(tickerData.state_4h, tickerData.state_daily, tickerData.state_weekly, tickerData.state_monthly, 
+                       tickerData.state_quarterly, tickerData.state_3m, tickerData.state_6m, tickerData.state_1y)
+    prevStates = array.from(tickerData.prevState_4h, tickerData.prevState_daily, tickerData.prevState_weekly, tickerData.prevState_monthly,
+                           tickerData.prevState_quarterly, tickerData.prevState_3m, tickerData.prevState_6m, tickerData.prevState_1y)
+    
+    for i = 0 to array.size(timeframes) - 1
+        currentState = array.get(states, i)
+        previousState = array.get(prevStates, i)
+        timeframe = array.get(timeframeNames, i)
+        
+        if currentState != previousState and not na(currentState) and not na(previousState)
+            alertMessage = timeframe + " State Change: " + ticker + " → " + f_getStateDescription(currentState)
+            alert(alertMessage, alert.freq_once_per_bar)

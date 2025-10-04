@@ -31,7 +31,7 @@ i_labelOffset = input.int(2, "Label Offset (bars)", 1, 10)
 
 // Debug Controls
 i_showDebugLabel = input.bool(false, "Show Debug Information")
-i_showPnLLabels = input.bool(true, "Show P&L Labels")
+i_showPnLLabels = input.bool(false, "Show P&L Labels (Debug Only)", tooltip="P&L labels are hidden by default. Enable debug mode to show position tracking.")
 
 // Retracement Level Plot Controls (for TradingView crossing alerts)
 i_showRetracementLevels = input.bool(true, "Show Retracement Level Plots")
@@ -846,8 +846,8 @@ if hasActivePosition and i_showPositionZones
                                    color.new(color.white, 100), border_width=0)
             box.set_bgcolor(stopLossZone, color.new(i_stopLossZoneColor, i_stopLossZoneTransparency))
 
-// P&L Label
-if hasActivePosition and i_showPnLLabels and barstate.islast
+// P&L Label - Only show when debug mode is enabled
+if hasActivePosition and i_showDebugLabel and barstate.islast
     if not na(pnlLabel)
         label.delete(pnlLabel)
     
@@ -884,7 +884,7 @@ else
         box.delete(stopLossZone)
         stopLossZone := na
 
-if not hasActivePosition or not i_showPnLLabels
+if not hasActivePosition or not i_showDebugLabel
     if not na(pnlLabel)
         label.delete(pnlLabel)
         pnlLabel := na

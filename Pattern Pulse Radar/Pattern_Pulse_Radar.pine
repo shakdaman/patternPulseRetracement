@@ -13,16 +13,16 @@ indicator("Pattern Pulse Radar", "PPR", overlay=true, max_labels_count=500, max_
 // INPUT PARAMETERS
 // ============================================================================
 
-// Scanner Configuration - OPTIMIZED FOR 40 REQUEST LIMIT (8×4=32)
-i_batchSize = input.int(8, "Batch Size", minval=1, maxval=8, tooltip="Number of tickers to scan per batch (8 tickers × 4 timeframes = 32 requests)")
+// Scanner Configuration - OPTIMIZED FOR 40 REQUEST LIMIT (8×5=40)
+i_batchSize = input.int(8, "Batch Size", minval=1, maxval=8, tooltip="Number of tickers to scan per batch (8 tickers × 5 timeframes = 40 requests)")
 i_currentBatch = input.int(1, "Current Batch", minval=1, maxval=9, tooltip="Which batch to display (1-9: Indices/Tech/Financial/Healthcare/Consumer/Energy/Industrial/REITs/Custom)")
 i_showMultipleBatches = input.bool(false, "Show Multiple Batches", tooltip="Display multiple batches in same pane (requires more requests)")
 i_maxBatchesToShow = input.int(2, "Max Batches to Show", minval=1, maxval=4, tooltip="Maximum number of batches to display when showing multiple batches")
 i_showDebug = input.bool(false, "Show Debug Info", tooltip="Display additional debugging information")
 
-// Timeframe Configuration - OPTIMIZED FOR 40 REQUEST LIMIT (8×4=32)
-i_timeframes = input.string("240,D,W,1M", "Timeframes", tooltip="Comma-separated timeframes to scan (8 tickers × 4 timeframes = 32 requests)")
-i_showTimeframes = input.string("240,D,W,1M", "Display Timeframes", tooltip="Timeframes to show in scanner (subset of scan timeframes)")
+// Timeframe Configuration - OPTIMIZED FOR 40 REQUEST LIMIT (8×5=40)
+i_timeframes = input.string("240,D,W,1M,3M", "Timeframes", tooltip="Comma-separated timeframes to scan (8 tickers × 5 timeframes = 40 requests)")
+i_showTimeframes = input.string("240,D,W,1M,3M", "Display Timeframes", tooltip="Timeframes to show in scanner (subset of scan timeframes)")
 
 // Pattern Detection Parameters
 i_trendLookback = input.int(20, "Trend Lookback", minval=5, maxval=100, tooltip="Periods for trend identification")
@@ -36,7 +36,7 @@ i_requireConfirmation = input.bool(true, "Require Confirmation", tooltip="Wait f
 i_requireVolumeConfirmation = input.bool(false, "Require Volume Confirmation", tooltip="Require above-average volume for pattern validity")
 
 // Display Settings
-i_tablePosition = input.string("top_left", "Table Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
+i_tablePosition = input.string("top_left", "Table Position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"])
 i_maxRows = input.int(8, "Max Rows", minval=1, maxval=8, tooltip="Maximum number of tickers to display (matches batch size)")
 i_tableOffsetX = input.int(10, "Table X Offset", minval=0, maxval=100, tooltip="Horizontal offset for table positioning (for dashboard layouts)")
 i_tableOffsetY = input.int(10, "Table Y Offset", minval=0, maxval=100, tooltip="Vertical offset for table positioning (for dashboard layouts)")
@@ -383,14 +383,15 @@ var table scannerTable = na
 if na(scannerTable)
     numCols = array.size(displayTimeframes) + 2 // +1 for ticker column, +1 for pattern dots
     positionValue = switch i_tablePosition
-        "top_center" => position.top_center
         "top_left" => position.top_left
+        "top_center" => position.top_center
         "top_right" => position.top_right
-        "bottom_left" => position.bottom_left
-        "bottom_right" => position.bottom_right
         "middle_left" => position.middle_left
-        "middle_right" => position.middle_right
         "middle_center" => position.middle_center
+        "middle_right" => position.middle_right
+        "bottom_left" => position.bottom_left
+        "bottom_center" => position.bottom_center
+        "bottom_right" => position.bottom_right
         => position.top_left
     
     tableRows = i_maxRows + 1 // +1 for header
@@ -441,11 +442,12 @@ if barstate.islast
             for j = 0 to array.size(displayTimeframes) - 1
                 tf = array.get(displayTimeframes, j)
                 
-                // Request HTF data with historical bars for consistent pattern detection
-                // This ensures patterns are detected using actual HTF data, not current chart timeframe
-                // Use gaps=barmerge.gaps_off and lookahead=barmerge.lookahead_off for accurate data
-                // Request multiple bars to ensure we get proper historical data
-                [htfOpen, htfHigh, htfLow, htfClose, htfVolume] = request.security(ticker, tf, [open, high, low, close, volume], lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+                // Request HTF data with completed bars for consistent pattern detection
+                // This ensures patterns are detected using the SAME HTF data regardless of chart timeframe
+                // Best Practice: Use lookahead=barmerge.lookahead_on to get the last COMPLETED HTF bar
+                // Best Practice: Use gaps=barmerge.gaps_off to ensure pure HTF data without repainting
+                // This guarantees consistent results when switching between chart timeframes (M vs 2M)
+                [htfOpen, htfHigh, htfLow, htfClose, htfVolume] = request.security(ticker, tf, [open, high, low, close, volume], lookahead=barmerge.lookahead_on, gaps=barmerge.gaps_off)
                 
                 // Detect patterns using actual HTF data for consistency across timeframes
                 patterns = detectHTFPatterns(htfOpen, htfHigh, htfLow, htfClose, htfVolume)
@@ -469,16 +471,8 @@ if barstate.islast
                         else
                             patterns := "Inside Bar"
                 
-                // Force Inside Bar detection for OSCR Daily timeframe when current chart shows Inside Bar
-                if ticker == "OSCR" and tf == "D"
-                    currentPatterns = detectPatterns()
-                    if str.length(currentPatterns) > 0 and str.contains(currentPatterns, "Inside Bar")
-                        // Current chart has Inside Bar for OSCR - force it into the radar
-                        if not str.contains(patterns, "Inside Bar")
-                            if str.length(patterns) > 0
-                                patterns := patterns + ",Inside Bar"
-                            else
-                                patterns := "Inside Bar"
+                // NOTE: Removed OSCR special case to ensure pure HTF data consistency
+                // All pattern detection now uses only HTF data regardless of current chart timeframe
                 
                 // Debug: Show raw data if debug mode is enabled
                 if i_showDebug
@@ -576,8 +570,8 @@ if i_showMultipleBatches and barstate.islast
             sampleSize = math.min(3, array.size(otherBatchTickers))
             for i = 0 to sampleSize - 1
                 ticker = array.get(otherBatchTickers, i)
-                // Quick pattern check on daily timeframe only
-                [htfOpen, htfHigh, htfLow, htfClose, htfVolume] = request.security(ticker, "D", [open, high, low, close, volume], lookahead=barmerge.lookahead_off)
+                // Quick pattern check on daily timeframe only (using completed bars for consistency)
+                [htfOpen, htfHigh, htfLow, htfClose, htfVolume] = request.security(ticker, "D", [open, high, low, close, volume], lookahead=barmerge.lookahead_on, gaps=barmerge.gaps_off)
                 patterns = detectHTFPatterns(htfOpen, htfHigh, htfLow, htfClose, htfVolume)
                 patternCount = getPatternCount(patterns)
                 
@@ -653,8 +647,8 @@ alertcondition(isThreeTwoBearishAlt(), "3-2 Bearish Reversal", "3-2 Bearish reve
 // - 3-2 Rev Bull: Reversal signal (Outside Bar → 2-Down → 2-Up) - After first directional move
 // - 3-2 Rev Bear: Reversal signal (Outside Bar → 2-Up → 2-Down) - After first directional move
 // 
-// TIMEFRAMES SUPPORTED (4 timeframes, 8×4=32 requests - optimal for 40 limit):
-// 240 (4H), D (Daily), W (Weekly), 1M (1 Month)
+// TIMEFRAMES SUPPORTED (5 timeframes, 8×5=40 requests - optimal for 40 limit):
+// 240 (4H), D (Daily), W (Weekly), 1M (1 Month), 3M (3 Month)
 // 
 // COLOR CODING:
 // - Green: Bullish patterns (3-2 Bull, 3-2 Rev Bull)
