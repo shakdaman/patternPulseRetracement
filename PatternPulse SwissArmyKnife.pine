@@ -71,6 +71,7 @@ show_current_year_open = input.bool(true, "Current Year Open", group=cpo_group)
 cpo_color = input.color(color.new(color.yellow, 0), "Line Color", group=cpo_group, inline="cpo_style")
 cpo_width = input.int(1, "Width", minval=1, group=cpo_group, inline="cpo_style")
 cpo_style_str = input.string("Solid", "Style", options=["Solid", "Dotted", "Dashed"], group=cpo_group, inline="cpo_style")
+cpo_line_length = input.int(10, "Line Length (Bars)", group=cpo_group, minval=1, maxval=50, tooltip="Number of bars the horizontal line extends to the right")
 cpo_label_offset = input.int(20, "Label Offset", group=cpo_group, tooltip="Number of bars to offset the Current Period Open labels. Increase to move labels further right and prevent overlapping.")
 
 // --- OPENING RANGE BREAKOUT (ORB) SETTINGS ---
@@ -82,6 +83,7 @@ orb_low_color = input.color(color.new(#D2691E, 20), "Low Color", group=orb_group
 orb_fill_color = input.color(color.new(#D2691E, 80), "Fill Color", group=orb_group)
 orb_width = input.int(2, "Line Width", minval=1, group=orb_group)
 orb_label_offset = input.int(10, "Label Offset", group=orb_group, tooltip="Number of bars to offset the ORB labels. Increase to move labels further right and prevent overlapping.")
+show_orb_alerts = input.bool(true, "Show ORB Break Alerts", group=orb_group, tooltip="Display concise alert labels when ORB high or low is broken")
 
 
 // --- DATA DISPLAY SETTINGS ---
@@ -89,16 +91,24 @@ data_group = "Data Display Settings"
 atr_len = input.int(14, "ATR Length", group=data_group)
 rsi_len = input.int(14, "RSI Length", group=data_group)
 
+// --- TIMEFRAME CONTINUITY SETTINGS ---
+tfc_group = "Timeframe Continuity Settings"
+tfc_atr_len = input.int(14, "ATR Length (Conviction)", minval=1, group=tfc_group, tooltip="Period for ATR calculation used in conviction heatmap")
+tfc_bullish_color = input.color(color.new(color.green, 0), "Bullish Color", group=tfc_group)
+tfc_bearish_color = input.color(color.new(color.red, 0), "Bearish Color", group=tfc_group)
+tfc_neutral_color = input.color(color.new(color.gray, 0), "Neutral Color", group=tfc_group)
+
 // --- ATR RAYS SETTINGS ---
 atr_ray_group = "ATR Ray Settings"
 show_live_atr = input.bool(false, "Live ATR", group=atr_ray_group, tooltip="Real-time ATR levels based on current bar's close + current ATR. Updates dynamically as price moves. Best for active trading and real-time analysis.")
 live_atr_color = input.color(color.new(color.aqua, 20), "Color", group=atr_ray_group, inline="live_atr")
 live_atr_style_str = input.string("Solid", "Style", options=["Solid", "Dotted", "Dashed"], group=atr_ray_group, inline="live_atr")
 live_atr_width = input.int(1, "Width", minval=1, group=atr_ray_group, inline="live_atr")
-show_static_atr = input.bool(true, "Static ATR", group=atr_ray_group, tooltip="Fixed ATR levels based on previous bar's close + previous ATR. Provides consistent reference points that don't change during the current bar. Best for planning and analysis.")
+show_static_atr = input.bool(true, "Static ATR", group=atr_ray_group, tooltip="Fixed ATR levels based on current bar's open + previous ATR. Provides consistent reference points that don't change during the current bar. Best for planning and analysis.")
 static_atr_color = input.color(color.new(color.yellow, 20), "Color", group=atr_ray_group, inline="static_atr")
 static_atr_style_str = input.string("Solid", "Style", options=["Solid", "Dotted", "Dashed"], group=atr_ray_group, inline="static_atr")
 static_atr_width = input.int(1, "Width", minval=1, group=atr_ray_group, inline="static_atr")
+atr_line_length = input.int(10, "Line Length (Bars)", group=atr_ray_group, minval=1, maxval=50)
 atr_label_offset = input.int(10, "Label Offset", group=atr_ray_group, tooltip="Number of bars to offset the ATR labels. Increase to move labels further right and prevent overlapping.")
 
 // --- ADR BANDS SETTINGS ---
@@ -124,6 +134,7 @@ bb_upper = bb_basis + bb_dev
 bb_lower = bb_basis - bb_dev
 atr_val = ta.atr(atr_len)
 rsi_val = ta.rsi(close, rsi_len)
+
 // Current period opens - using lookahead_off to get current period open prices
 current_day_open = request.security(syminfo.tickerid, "D", open, lookahead=barmerge.lookahead_off)
 current_week_open = request.security(syminfo.tickerid, "W", open, lookahead=barmerge.lookahead_off)
@@ -132,7 +143,7 @@ current_quarter_open = request.security(syminfo.tickerid, "3M", open, lookahead=
 current_year_open = request.security(syminfo.tickerid, "12M", open, lookahead=barmerge.lookahead_off)
 
 // ADR Calculations - Get completed daily high, low, and open data
-[daily_high, daily_low, daily_open] = request.security(syminfo.tickerid, "D", [high, low, open], lookahead=barmerge.lookahead_on)
+[daily_high, daily_low, daily_open] = request.security(syminfo.tickerid, "D", [high, low, open], lookahead=barmerge.lookahead_off)
 daily_range = daily_high - daily_low
 
 // Calculate ADR values using completed daily bars
@@ -203,6 +214,9 @@ var linefill orbFill = na
 
 var float session_orb_high = na
 var float session_orb_low = na
+var bool orb_high_broken = false
+var bool orb_low_broken = false
+var label orbBreakLabel = na
 
 // Get 1-minute data arrays for the current chart bar. This is the key to multi-timeframe compatibility.
 [time_1m, high_1m, low_1m] = request.security_lower_tf(syminfo.tickerid, "1", [time, high, low])
@@ -215,10 +229,13 @@ orb_end_time = session_start_time + orb_period_minutes * 60 * 1000
 if is_new_session
     session_orb_high := na
     session_orb_low := na
+    orb_high_broken := false
+    orb_low_broken := false
     line.delete(orbHighLine[1])
     line.delete(orbLowLine[1])
     label.delete(orbHighLabel[1])
     label.delete(orbLowLabel[1])
+    label.delete(orbBreakLabel[1])
     linefill.delete(orbFill[1])
 
 // Check if there is 1-minute data available for this bar
@@ -248,8 +265,33 @@ if g_show_orb and in_session_for_drawing and not na(session_orb_high)
     orbFill := linefill.new(orbHighLine, orbLowLine, color=orb_fill_color)
 
     orb_label_offset_time = time + (time - time[1]) * orb_label_offset
-    orbHighLabel := label.new(orb_label_offset_time, session_orb_high + (session_orb_high * 0.001), "ORB High", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(orb_high_color, 20), textcolor=color.white, size=size.small)
-    orbLowLabel := label.new(orb_label_offset_time, session_orb_low + (session_orb_low * 0.001), "ORB Low", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(orb_low_color, 20), textcolor=color.white, size=size.small)
+    orbHighLabel := label.new(orb_label_offset_time, session_orb_high, "ORB H", xloc=xloc.bar_time, style=label.style_none, textcolor=orb_high_color, size=size.normal)
+    orbLowLabel := label.new(orb_label_offset_time, session_orb_low, "ORB L", xloc=xloc.bar_time, style=label.style_none, textcolor=orb_low_color, size=size.normal)
+
+// ORB Break Detection and Alert (outside the drawing block so it always runs when ORB is formed)
+// Check if ORB formation period has completed and we have valid ORB levels
+orb_period_complete = time >= orb_end_time and not na(session_orb_high)
+if orb_period_complete and show_orb_alerts and barstate.isconfirmed
+    // Delete previous alert label
+    label.delete(orbBreakLabel[1])
+    
+    // Check for new breaks (using completed bar's high/low)
+    high_broken = high[1] > session_orb_high and not orb_high_broken
+    low_broken = low[1] < session_orb_low and not orb_low_broken
+    
+    // Update tracking state
+    if high[1] > session_orb_high
+        orb_high_broken := true
+    if low[1] < session_orb_low
+        orb_low_broken := true
+    
+    // Display alert if there's a new break
+    if high_broken
+        orbBreakLabel := label.new(bar_index[1], high[1], "↑ ORB H", xloc=xloc.bar_index, style=label.style_label_down, textcolor=orb_high_color, color=na, size=size.normal)
+    else if low_broken
+        orbBreakLabel := label.new(bar_index[1], low[1], "↓ ORB L", xloc=xloc.bar_index, style=label.style_label_up, textcolor=orb_low_color, color=na, size=size.normal)
+else if not show_orb_alerts
+    label.delete(orbBreakLabel[1])
 
 // --- PLOTTING ---
 plot(ema5, "EMA 5", color=g_show_mas and show_ema5 ? ema5_color : na, linewidth=ema5_width, style=ema5_style_str == "Solid" ? plot.style_line : plot.style_linebr)
@@ -281,14 +323,20 @@ if barstate.islast
         // Delete old lines first
         line.delete(staticUpperAtrLine[1]), label.delete(staticUpperAtrLabel[1]), line.delete(staticLowerAtrLine[1]), label.delete(staticLowerAtrLabel[1])
         
-        static_upper_level = close[1] + atr_val[1]
-        static_lower_level = close[1] - atr_val[1]
-        static_upper_label_text = "Static ATR: " + str.tostring(static_upper_level, format.mintick)
-        static_lower_label_text = "Static ATR: " + str.tostring(static_lower_level, format.mintick)
-        staticUpperAtrLine := line.new(time[1], static_upper_level, time, static_upper_level, xloc = xloc.bar_time, extend=extend.both, color=static_atr_color, style=f_getLineStyle(static_atr_style_str), width=static_atr_width)
-        staticUpperAtrLabel := label.new(atr_label_offset_time, static_upper_level + (static_upper_level * 0.001), static_upper_label_text, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(static_atr_color, 20), textcolor=color.white, size=size.small)
-        staticLowerAtrLine := line.new(time[1], static_lower_level, time, static_lower_level, xloc = xloc.bar_time, extend=extend.both, color=static_atr_color, style=f_getLineStyle(static_atr_style_str), width=static_atr_width)
-        staticLowerAtrLabel := label.new(atr_label_offset_time, static_lower_level + (static_lower_level * 0.001), static_lower_label_text, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(static_atr_color, 20), textcolor=color.white, size=size.small)
+        static_upper_level = open + atr_val[1]
+        static_lower_level = open - atr_val[1]
+        static_upper_label_text = "S-ATR: " + str.tostring(static_upper_level, format.mintick)
+        static_lower_label_text = "S-ATR: " + str.tostring(static_lower_level, format.mintick)
+        // Short horizontal rays forward
+        atr_bar_spacing = time - time[1]
+        if atr_bar_spacing <= 0
+            atr_bar_spacing := timeframe.in_seconds() * 1000
+        atr_line_end_time = time + (atr_bar_spacing * atr_line_length)
+
+        staticUpperAtrLine := line.new(time, static_upper_level, atr_line_end_time, static_upper_level, xloc = xloc.bar_time, extend=extend.none, color=static_atr_color, style=f_getLineStyle(static_atr_style_str), width=static_atr_width)
+        staticUpperAtrLabel := label.new(atr_line_end_time, static_upper_level, static_upper_label_text, xloc=xloc.bar_time, style=label.style_none, textcolor=static_atr_color, size=size.normal)
+        staticLowerAtrLine := line.new(time, static_lower_level, atr_line_end_time, static_lower_level, xloc = xloc.bar_time, extend=extend.none, color=static_atr_color, style=f_getLineStyle(static_atr_style_str), width=static_atr_width)
+        staticLowerAtrLabel := label.new(atr_line_end_time, static_lower_level, static_lower_label_text, xloc=xloc.bar_time, style=label.style_none, textcolor=static_atr_color, size=size.normal)
     else
         // Delete lines when toggles are off
         line.delete(staticUpperAtrLine[1]), label.delete(staticUpperAtrLabel[1]), line.delete(staticLowerAtrLine[1]), label.delete(staticLowerAtrLabel[1])
@@ -300,33 +348,46 @@ if barstate.islast
         
         live_upper_level = close + atr_val
         live_lower_level = close - atr_val
-        live_upper_label_text = "Live ATR: " + str.tostring(live_upper_level, format.mintick)
-        live_lower_label_text = "Live ATR: " + str.tostring(live_lower_level, format.mintick)
-        liveUpperAtrLine := line.new(time, live_upper_level, time + 1, live_upper_level, xloc = xloc.bar_time, extend=extend.both, color=live_atr_color, style=f_getLineStyle(live_atr_style_str), width=live_atr_width)
-        liveUpperAtrLabel := label.new(atr_label_offset_time, live_upper_level + (live_upper_level * 0.001), live_upper_label_text, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(live_atr_color, 20), textcolor=color.white, size=size.small)
-        liveLowerAtrLine := line.new(time, live_lower_level, time + 1, live_lower_level, xloc = xloc.bar_time, extend=extend.both, color=live_atr_color, style=f_getLineStyle(live_atr_style_str), width=live_atr_width)
-        liveLowerAtrLabel := label.new(atr_label_offset_time, live_lower_level + (live_lower_level * 0.001), live_lower_label_text, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(live_atr_color, 20), textcolor=color.white, size=size.small)
+        live_upper_label_text = "L-ATR: " + str.tostring(live_upper_level, format.mintick)
+        live_lower_label_text = "L-ATR: " + str.tostring(live_lower_level, format.mintick)
+        // Short horizontal rays forward
+        live_atr_bar_spacing = time - time[1]
+        if live_atr_bar_spacing <= 0
+            live_atr_bar_spacing := timeframe.in_seconds() * 1000
+        live_atr_line_end_time = time + (live_atr_bar_spacing * atr_line_length)
+
+        liveUpperAtrLine := line.new(time, live_upper_level, live_atr_line_end_time, live_upper_level, xloc = xloc.bar_time, extend=extend.none, color=live_atr_color, style=f_getLineStyle(live_atr_style_str), width=live_atr_width)
+        liveUpperAtrLabel := label.new(live_atr_line_end_time, live_upper_level, live_upper_label_text, xloc=xloc.bar_time, style=label.style_none, textcolor=live_atr_color, size=size.normal)
+        liveLowerAtrLine := line.new(time, live_lower_level, live_atr_line_end_time, live_lower_level, xloc = xloc.bar_time, extend=extend.none, color=live_atr_color, style=f_getLineStyle(live_atr_style_str), width=live_atr_width)
+        liveLowerAtrLabel := label.new(live_atr_line_end_time, live_lower_level, live_lower_label_text, xloc=xloc.bar_time, style=label.style_none, textcolor=live_atr_color, size=size.normal)
     else
         // Delete lines when toggles are off
         line.delete(liveUpperAtrLine[1]), label.delete(liveUpperAtrLabel[1]), line.delete(liveLowerAtrLine[1]), label.delete(liveLowerAtrLabel[1])
 
     // --- Current Period Opens ---
     if g_show_current_opens
+        // Calculate end time for horizontal lines (extend forward by specified number of bars)
+        // Use bar spacing from previous bars, fallback to timeframe if needed
+        bar_spacing = time - time[1]
+        if bar_spacing <= 0
+            bar_spacing := timeframe.in_seconds() * 1000
+        line_end_time = time + (bar_spacing * cpo_line_length)
+        
         if show_current_day_open
-            cdoLine := line.new(time[1], current_day_open, time, current_day_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cdoLabel := label.new(cpo_label_offset_time, current_day_open + (current_day_open * 0.001), "Current Day Open", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cdoLine := line.new(time, current_day_open, line_end_time, current_day_open, xloc = xloc.bar_time, extend=extend.none, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
+            cdoLabel := label.new(line_end_time, current_day_open, "D Open", xloc=xloc.bar_time, style=label.style_none, textcolor=cpo_color, size=size.normal)
         if show_current_week_open
-            cwoLine := line.new(time[1], current_week_open, time, current_week_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cwoLabel := label.new(cpo_label_offset_time, current_week_open + (current_week_open * 0.001), "Current Week Open", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cwoLine := line.new(time, current_week_open, line_end_time, current_week_open, xloc = xloc.bar_time, extend=extend.none, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
+            cwoLabel := label.new(line_end_time, current_week_open, "W Open", xloc=xloc.bar_time, style=label.style_none, textcolor=cpo_color, size=size.normal)
         if show_current_month_open
-            cmoLine := line.new(time[1], current_month_open, time, current_month_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cmoLabel := label.new(cpo_label_offset_time, current_month_open + (current_month_open * 0.001), "Current Month Open", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cmoLine := line.new(time, current_month_open, line_end_time, current_month_open, xloc = xloc.bar_time, extend=extend.none, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
+            cmoLabel := label.new(line_end_time, current_month_open, "M Open", xloc=xloc.bar_time, style=label.style_none, textcolor=cpo_color, size=size.normal)
         if show_current_quarter_open
-            cqoLine := line.new(time[1], current_quarter_open, time, current_quarter_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cqoLabel := label.new(cpo_label_offset_time, current_quarter_open + (current_quarter_open * 0.001), "Current Quarter Open", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cqoLine := line.new(time, current_quarter_open, line_end_time, current_quarter_open, xloc = xloc.bar_time, extend=extend.none, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
+            cqoLabel := label.new(line_end_time, current_quarter_open, "Q Open", xloc=xloc.bar_time, style=label.style_none, textcolor=cpo_color, size=size.normal)
         if show_current_year_open
-            cyoLine := line.new(time[1], current_year_open, time, current_year_open, xloc = xloc.bar_time, extend=extend.both, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
-            cyoLabel := label.new(cpo_label_offset_time, current_year_open + (current_year_open * 0.001), "Current Year Open", xloc=xloc.bar_time, style=label.style_label_down, color=color.new(cpo_color, 20), textcolor=color.white, size=size.small)
+            cyoLine := line.new(time, current_year_open, line_end_time, current_year_open, xloc = xloc.bar_time, extend=extend.none, color=cpo_color, style=f_getLineStyle(cpo_style_str), width=cpo_width)
+            cyoLabel := label.new(line_end_time, current_year_open, "Y Open", xloc=xloc.bar_time, style=label.style_none, textcolor=cpo_color, size=size.normal)
 
     // --- ADR Bands ---
     if g_show_adr_bands
@@ -378,168 +439,202 @@ if barstate.islast
     else
         table.clear(infoPanel, 0, 0, 0, 1)
 
-// --- MODERN TIMEFRAME CONTINUITY TRACKER ---
-// Type definition for timeframe data
-type TfData
+// --- ENHANCED TIMEFRAME CONTINUITY & MOMENTUM TRACKER ---
+
+// Type definition for timeframe analysis data
+type TFAnalysis
     int candle_type
-    bool is_bullish
-    float close_price
-    float open_price
+    bool is_green
+    float true_range
+    float atr_value
+    float conviction
 
-// Candle classification types: 1=Inside, 2=Breaker, 3=Outside
-f_classifyCandle(tf) =>
-    // Use consistent HTF data retrieval - get completed bars only for consistency
-    [tf_high, tf_low, tf_close, tf_open] = request.security(syminfo.tickerid, tf, [high, low, close, open], lookahead=barmerge.lookahead_off)
-    [tf_high_prev, tf_low_prev] = request.security(syminfo.tickerid, tf, [high[1], low[1]], lookahead=barmerge.lookahead_off)
-    
-    // Inside candle: current high < previous high AND current low > previous low
-    is_inside = tf_high < tf_high_prev and tf_low > tf_low_prev
-    
-    // Outside candle: current high > previous high AND current low < previous low  
-    is_outside = tf_high > tf_high_prev and tf_low < tf_low_prev
-    
-    // Determine candle type and direction based on TheStrat methodology
-    candle_type = is_inside ? 1 : is_outside ? 3 : 2
-    
-    // For Breaker candles: direction based on which previous level is broken
-    is_bullish = candle_type == 2 ? (tf_high > tf_high_prev) : (tf_close > tf_open)
-    
-    TfData.new(candle_type, is_bullish, tf_close, tf_open)
+// Candle type constants (STRAT methodology)
+int INSIDE = 1
+int TWO_UP = 2
+int TWO_DOWN = 3
+int OUTSIDE = 4
 
-// Calculate momentum score based on Enhanced TheStrat methodology with Fibonacci weighting
-f_calculateMomentum(tf_data_array, use_weighting) =>
-    total_points = 0.0
-    max_points = 0.0
-    
-    // Fibonacci weighting: 5m:1, 15m:1, 1H:2, 4H:3, D:5, W:8, M:13, Q:21
-    weights = array.from<float>(1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0)
-    
-    for i = 0 to array.size(tf_data_array) - 1
-        tf_data = array.get(tf_data_array, i)
-        candle_type = tf_data.candle_type
-        is_bullish = tf_data.is_bullish
-        is_green = tf_data.close_price > tf_data.open_price
-        
-        // Get weight for this timeframe
-        weight = use_weighting ? array.get(weights, i) : 1.0
-        
-        // Enhanced scoring system
-        if candle_type == 2  // Breaker candle
-            if is_bullish  // Breaker Up
-                if is_green
-                    total_points += 1.0 * weight  // Strong bullish: Breaker Up + Green
-                else
-                    total_points += 0.5 * weight  // Weak bullish: Breaker Up + Red
-            else  // Breaker Down
-                if is_green
-                    total_points -= 0.5 * weight  // Weak bearish: Breaker Down + Green
-                else
-                    total_points -= 1.0 * weight  // Strong bearish: Breaker Down + Red
-            max_points += weight
-        else if candle_type == 3  // Outside candle
-            total_points += (is_green ? 1.0 : -1.0) * weight  // Full points based on candle color
-            max_points += weight
-        else if candle_type == 1  // Inside candle
-            max_points += weight
-            // 0 points for inside candles
-        
-    momentum_percent = max_points > 0 ? (total_points / max_points) * 100 : 0
-    [momentum_percent, total_points, max_points]
+// Timeframe definitions for analysis
+var string[] TFC_TIMEFRAMES = array.from("15", "60", "240", "D", "W", "M", "3M")
+var string[] TFC_LABELS = array.from("15m", "1h", "4h", "1D", "1W", "1M", "3M")
+var float[] TFC_WEIGHTS = array.from(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0)
 
-// Get momentum color based on enhanced percentage scoring
-f_getMomentumColor(momentum_percent) =>
-    if momentum_percent >= 75
-        color.new(color.green, 0)  // Strong Bullish
-    else if momentum_percent >= 50
-        color.new(color.new(color.green, 20), 0)  // Moderate Bullish
-    else if momentum_percent >= 25
-        color.new(color.new(color.green, 40), 0)  // Weak Bullish
-    else if momentum_percent > -25
-        color.new(color.gray, 0)  // Neutral
-    else if momentum_percent >= -50
-        color.new(color.new(color.orange, 20), 0)  // Weak Bearish
-    else if momentum_percent >= -75
-        color.new(color.new(color.red, 20), 0)  // Moderate Bearish
+// Function: Fetch non-repainting data for a single timeframe
+// Uses 4 request.security() calls with tuple returns (original working logic)
+f_fetchTFData(string tf, int atr_len) =>
+    [c_high, c_low, c_close, c_open] = request.security(syminfo.tickerid, tf, [high, low, close, open], lookahead=barmerge.lookahead_off)
+    [p_high, p_low] = request.security(syminfo.tickerid, tf, [high[1], low[1]], lookahead=barmerge.lookahead_off)
+    tf_tr = request.security(syminfo.tickerid, tf, ta.tr, lookahead=barmerge.lookahead_off)
+    tf_atr = request.security(syminfo.tickerid, tf, ta.atr(atr_len), lookahead=barmerge.lookahead_off)
+    [c_high, c_low, c_close, c_open, p_high, p_low, tf_tr, tf_atr]
+
+// Function: Classify candle using STRAT methodology (hierarchical)
+f_classifyCandleSTRAT(float c_high, float c_low, float p_high, float p_low) =>
+    is_outside = c_high > p_high and c_low < p_low
+    is_inside = c_high < p_high and c_low > p_low
+    is_two_up = c_high > p_high and c_low >= p_low
+    is_two_down = c_low < p_low and c_high <= p_high
+    
+    candle_type = INSIDE
+    if is_outside
+        candle_type := OUTSIDE
+    else if is_inside
+        candle_type := INSIDE
+    else if is_two_up
+        candle_type := TWO_UP
+    else if is_two_down
+        candle_type := TWO_DOWN
+    
+    candle_type
+
+// Function: Calculate base score for candle based on type and color
+f_calculateBaseScore(int candle_type, bool is_green) =>
+    score = 0.0
+    
+    if candle_type == TWO_UP
+        score := is_green ? 2.0 : 1.0
+    else if candle_type == TWO_DOWN
+        score := is_green ? -1.0 : -2.0
+    else if candle_type == OUTSIDE
+        score := is_green ? 1.0 : -1.0
+    else if candle_type == INSIDE
+        score := 0.0
+    
+    score
+
+// Function: Calculate conviction (TR relative to ATR)
+f_calculateConviction(float true_range, float atr_value) =>
+    conviction = atr_value > 0 ? true_range / atr_value : 0.5
+    conviction
+
+// Function: Get status label for candle type
+f_getStatusLabel(int candle_type) =>
+    label = ""
+    if candle_type == INSIDE
+        label := "Inside"
+    else if candle_type == OUTSIDE
+        label := "Outside"
+    else if candle_type == TWO_UP
+        label := "Breaker Up"
+    else if candle_type == TWO_DOWN
+        label := "Breaker Down"
     else
-        color.new(color.red, 0)  // Strong Bearish
+        label := "Unknown"
+    label
 
-// Create momentum meter visual
-f_createMomentumMeter(momentum_percent) =>
-    filled_segments = math.round(math.abs(momentum_percent) / 10)
-    meter_text = ""
+// Function: Get symbol for candle type
+f_getCandleSymbol(int candle_type) =>
+    symbol = ""
+    if candle_type == INSIDE
+        symbol := "‖"
+    else if candle_type == OUTSIDE
+        symbol := "〇"
+    else if candle_type == TWO_UP
+        symbol := "▲"
+    else if candle_type == TWO_DOWN
+        symbol := "▼"
+    else
+        symbol := "?"
+    symbol
+
+// Function: Create momentum progress bar
+f_createMomentumBar(float momentum_score) =>
+    abs_score = math.abs(momentum_score)
+    filled_segments = math.round((abs_score / 100) * 10)
     
+    bar_text = ""
     for i = 1 to 10
         if i <= filled_segments
-            meter_text += "█"
+            bar_text += "█"
         else
-            meter_text += "░"
+            bar_text += "░"
     
-    meter_text
+    bar_text
 
-// Get symbol and label for candle type
-f_getCandleDisplay(candle_type, is_bullish, is_green) =>
-    symbol = candle_type == 1 ? "‖" : candle_type == 3 ? "〇" : (is_bullish ? "▲" : "▼")
-    label = candle_type == 1 ? "Inside" : candle_type == 3 ? "Outside" : (is_bullish ? "Breaker Up" : "Breaker Down")
-    [symbol, label]
+// Function: Calculate normalized momentum score (-100 to +100)
+f_calculateMomentumScore(TFAnalysis[] analyses, bool use_weighting) =>
+    raw_score = 0.0
+    max_possible = 0.0
+    
+    for i = 0 to array.size(analyses) - 1
+        analysis = array.get(analyses, i)
+        weight = use_weighting ? array.get(TFC_WEIGHTS, i) : 1.0
+        
+        base_score = f_calculateBaseScore(analysis.candle_type, analysis.is_green)
+        raw_score += base_score * weight
+        max_possible += 2.0 * weight
+    
+    momentum_score = max_possible > 0 ? (raw_score / max_possible) * 100 : 0.0
+    [momentum_score, raw_score, max_possible]
 
-// Main timeframe continuity display
-var table ftfcPanel = table.new(position.bottom_right, 8, 3, bgcolor = color.new(color.black, 50), border_width = 1)
-var table momentumPanel = table.new(position.top_right, 1, 2, bgcolor = color.new(color.black, 60), border_width = 1)
+// Function: Get momentum gradient color
+f_getMomentumGradientColor(float momentum_score, color bull_color, color bear_color, color neutral_color) =>
+    if momentum_score > 0
+        color.from_gradient(momentum_score, 0, 100, neutral_color, bull_color)
+    else if momentum_score < 0
+        color.from_gradient(momentum_score, -100, 0, bear_color, neutral_color)
+    else
+        neutral_color
+
+// Main calculations - Analyze all timeframes
+var tf_analyses = array.new<TFAnalysis>()
+if g_show_tf_continuity
+    array.clear(tf_analyses)
+    
+    for i = 0 to array.size(TFC_TIMEFRAMES) - 1
+        tf = array.get(TFC_TIMEFRAMES, i)
+        [c_high, c_low, c_close, c_open, p_high, p_low, tf_tr, tf_atr] = f_fetchTFData(tf, tfc_atr_len)
+        candle_type = f_classifyCandleSTRAT(c_high, c_low, p_high, p_low)
+        is_green = c_close > c_open
+        conviction = f_calculateConviction(tf_tr, tf_atr)
+        analysis = TFAnalysis.new(candle_type, is_green, tf_tr, tf_atr, conviction)
+        array.push(tf_analyses, analysis)
+
+// Calculate momentum score
+var float tfc_momentum_score = na
+var float tfc_raw_score = na
+var float tfc_max_score = na
+
+if g_show_tf_continuity and array.size(tf_analyses) > 0
+    [momentum_score, raw_score, max_score] = f_calculateMomentumScore(tf_analyses, g_use_weighted_scoring)
+    tfc_momentum_score := momentum_score
+    tfc_raw_score := raw_score
+    tfc_max_score := max_score
+
+// Dashboard visualization
+var table tfc_dashboard = table.new(position.bottom_right, 7, 3, border_width=1, border_color=color.new(color.gray, 60))
+var table tfc_momentum_panel = table.new(position.top_right, 1, 2, border_width=1, border_color=color.new(color.gray, 60))
 
 if barstate.islast
     if g_show_tf_continuity
-        // Define timeframes using proper Pine Script v6 arrays
-        timeframes = array.from<string>("5", "15", "60", "240", "D", "W", "M", "3M")
-        timeframe_labels = array.from<string>("5m", "15m", "1H", "4H", "D", "W", "M", "Q")
-        
-        // Collect timeframe data using proper type declaration
-        var tf_data_array = array.new<TfData>()
-        array.clear(tf_data_array)
-        
-        for i = 0 to array.size(timeframes) - 1
-            tf = array.get(timeframes, i)
-            tf_classification = f_classifyCandle(tf)
-            array.push(tf_data_array, tf_classification)
-        
-        // Calculate momentum
-        [momentum_percent, total_points, max_points] = f_calculateMomentum(tf_data_array, g_use_weighted_scoring)
-        
-        // Create momentum meter
-        momentum_meter = f_createMomentumMeter(momentum_percent)
-        momentum_color = f_getMomentumColor(momentum_percent)
+        // Display main dashboard - horizontal layout (3 rows × 7 columns)
+        for i = 0 to array.size(TFC_TIMEFRAMES) - 1
+            col = i
+            analysis = array.get(tf_analyses, i)
+            tf_label = array.get(TFC_LABELS, i)
+            
+            candle_symbol = f_getCandleSymbol(analysis.candle_type)
+            
+            symbol_color = color.white
+            if analysis.candle_type == TWO_UP
+                symbol_color := analysis.is_green ? color.new(color.green, 0) : color.new(color.orange, 0)
+            else if analysis.candle_type == TWO_DOWN
+                symbol_color := analysis.is_green ? color.new(color.orange, 0) : color.new(color.red, 0)
+            else if analysis.candle_type == OUTSIDE
+                symbol_color := analysis.is_green ? color.new(color.green, 0) : color.new(color.red, 0)
+            
+            table.cell(tfc_dashboard, col, 0, candle_symbol, bgcolor=color.new(color.gray, 80), text_color=symbol_color, text_size=size.large, text_font_family=font.family_default)
+            table.cell(tfc_dashboard, col, 1, tf_label, bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.normal, text_font_family=font.family_default)
+            status_label = f_getStatusLabel(analysis.candle_type)
+            table.cell(tfc_dashboard, col, 2, status_label, bgcolor=color.new(color.black, 0), text_color=color.white, text_size=size.small, text_font_family=font.family_default)
         
         // Display momentum panel
-        table.cell(momentumPanel, 0, 0, "Momentum: " + str.tostring(momentum_percent, "#.#") + "%", text_color=color.white, bgcolor=momentum_color, text_size=size.normal)
-        table.cell(momentumPanel, 0, 1, momentum_meter, text_color=momentum_color, text_size=size.normal)
-        
-        // Display timeframe continuity panel
-        for i = 0 to array.size(timeframes) - 1
-            tf_data = array.get(tf_data_array, i)
-            candle_type = tf_data.candle_type
-            is_bullish = tf_data.is_bullish
-            
-            is_green = tf_data.close_price > tf_data.open_price
-            [symbol, label] = f_getCandleDisplay(candle_type, is_bullish, is_green)
-            
-            // Enhanced color logic based on candle type and color
-            symbol_color = candle_type == 1 ? color.white : 
-                          candle_type == 3 ? (is_green ? color.new(color.green, 0) : color.new(color.red, 0)) :
-                          candle_type == 2 ? (is_bullish ? (is_green ? color.new(color.green, 0) : color.new(color.orange, 0)) : (is_green ? color.new(color.orange, 0) : color.new(color.red, 0))) :
-                          color.white
-            
-            label_color = candle_type == 1 ? color.white : 
-                         candle_type == 3 ? (is_green ? color.new(color.green, 0) : color.new(color.red, 0)) :
-                         candle_type == 2 ? (is_bullish ? (is_green ? color.new(color.green, 0) : color.new(color.orange, 0)) : (is_green ? color.new(color.orange, 0) : color.new(color.red, 0))) :
-                         color.white
-            
-            // Row 0: Symbols
-            table.cell(ftfcPanel, i, 0, symbol, text_color=symbol_color, bgcolor=color.new(color.black, 50), width=4, text_size=size.large)
-            
-            // Row 1: Timeframe labels  
-            table.cell(ftfcPanel, i, 1, array.get(timeframe_labels, i), text_color=color.white, bgcolor=color.new(color.black, 50), width=4, text_size=size.normal)
-            
-            // Row 2: Status labels
-            table.cell(ftfcPanel, i, 2, label, text_color=label_color, bgcolor=color.new(color.black, 50), width=4, text_size=size.small)
+        momentum_text = str.tostring(tfc_momentum_score, "#.#") + "%"
+        momentum_bg = f_getMomentumGradientColor(tfc_momentum_score, tfc_bullish_color, tfc_bearish_color, tfc_neutral_color)
+        momentum_bar = f_createMomentumBar(tfc_momentum_score)
+        table.cell(tfc_momentum_panel, 0, 0, "Momentum: " + momentum_text, bgcolor=momentum_bg, text_color=color.white, text_size=size.normal, text_font_family=font.family_default)
+        table.cell(tfc_momentum_panel, 0, 1, momentum_bar, bgcolor=color.new(color.gray, 90), text_color=momentum_bg, text_size=size.normal, text_font_family=font.family_default)
     else
-        table.clear(ftfcPanel, 0, 0, 7, 2)
-        table.clear(momentumPanel, 0, 0, 0, 1)
+        table.clear(tfc_dashboard, 0, 0, 6, 2)
+        table.clear(tfc_momentum_panel, 0, 0, 0, 1)

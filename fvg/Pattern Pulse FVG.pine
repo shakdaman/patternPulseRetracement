@@ -1,0 +1,587 @@
+//@version=6
+indicator("Pattern Pulse FVG", shorttitle="PP FVG", overlay=true, max_boxes_count=500, max_labels_count=100, max_lines_count=100)
+
+// ============================================================================
+// SECTION 1: USER INPUTS
+// ============================================================================
+
+// --- FVG Detection Settings ---
+i_fvgAtrThreshold = input.float(0.7, "FVG Min Size (x ATR)", minval=0.1, maxval=3.0, step=0.1, tooltip="Minimum size of an FVG relative to the 14-period ATR to be considered valid", group="FVG Detection")
+
+// --- Strength Scoring Weights ---
+i_consistencyWeight = input.int(40, "Strength Weight: Consistency", minval=0, maxval=100, tooltip="Weighting for the Consistency Theory score (0-100%)", group="Strength Scoring")
+
+i_magnitudeWeight = input.int(30, "Strength Weight: Magnitude", minval=0, maxval=100, tooltip="Weighting for the Magnitude vs ATR score (0-100%)", group="Strength Scoring")
+
+i_volumeWeight = input.int(30, "Strength Weight: Volume", minval=0, maxval=100, tooltip="Weighting for the Volume Confirmation score (0-100%)", group="Strength Scoring")
+
+// --- Signal Filtering ---
+i_reversalMinScore = input.int(60, "Reversal Signal Min Strength", minval=0, maxval=100, tooltip="Minimum composite score for an FVG to generate reversal signals", group="Signal Filters")
+
+i_continuationMaxScore = input.int(40, "Continuation Signal Max Strength", minval=0, maxval=100, tooltip="Maximum initial score for an FVG to be a candidate for iFVG signals", group="Signal Filters")
+
+i_minRiskReward = input.float(2.0, "Minimum Risk:Reward Ratio", minval=0.5, maxval=10.0, step=0.5, tooltip="Minimum R:R ratio required for signals to be displayed", group="Signal Filters")
+
+// --- Swing Detection Settings ---
+i_swingLeftBars = input.int(5, "Swing Lookback Left", minval=2, maxval=50, tooltip="Number of bars to the left for pivot detection", group="Swing Detection")
+
+i_swingRightBars = input.int(5, "Swing Lookback Right", minval=2, maxval=50, tooltip="Number of bars to the right for pivot detection", group="Swing Detection")
+
+// --- Display Settings ---
+i_showReversals = input.bool(true, "Show Reversal Signals", group="Display Settings")
+
+i_showContinuations = input.bool(true, "Show Continuation Signals", group="Display Settings")
+
+i_showFvgBoxes = input.bool(true, "Show FVG Boxes", group="Display Settings")
+
+i_showStrengthLabels = input.bool(true, "Show Strength Scores", group="Display Settings")
+
+i_maxFvgsToDisplay = input.int(20, "Max FVGs to Display", minval=5, maxval=100, tooltip="Maximum number of active FVGs to show on chart", group="Display Settings")
+
+// --- Multi-Timeframe Settings ---
+i_enableMTF = input.bool(false, "Enable Multi-Timeframe Analysis", group="Multi-Timeframe")
+
+i_htfTimeframe = input.timeframe("240", "Higher Timeframe", tooltip="Higher timeframe for confluence analysis", group="Multi-Timeframe")
+
+// ============================================================================
+// SECTION 2: CUSTOM DATA TYPES (UDTs)
+// ============================================================================
+
+// @type FVG data structure for Fair Value Gap
+type FVG
+    float top
+    float bottom
+    bool isBullish
+    int startBar
+    int strengthScore
+    string state
+    float consistencyScore
+    float magnitudeScore
+    float volumeScore
+    box fvgBox
+    label strengthLabel
+
+// @type Pivot data structure for swing points
+type Pivot
+    float price
+    int barIndex
+    bool isHigh
+
+// ============================================================================
+// SECTION 3: GLOBAL ARRAYS AND VARIABLES
+// ============================================================================
+
+var array<FVG> fvgs_active = array.new<FVG>()
+var array<Pivot> pivots_major = array.new<Pivot>()
+var line currentTargetLine = na
+var float lastSignificantSwingHigh = na
+var float lastSignificantSwingLow = na
+
+// ============================================================================
+// SECTION 4: CANDLESTICK PATTERN DETECTION FUNCTIONS
+// ============================================================================
+
+// @function Detects Bullish Engulfing pattern
+// @returns true if pattern is detected
+f_isBullishEngulfing() =>
+    bool result = false
+    if bar_index >= 1
+        prevOpen = open[1]
+        prevClose = close[1]
+        currOpen = open
+        currClose = close
+        
+        isPrevBearish = prevClose < prevOpen
+        isCurrBullish = currClose > currOpen
+        engulfsBody = currClose > prevOpen and currOpen < prevClose
+        
+        result := isPrevBearish and isCurrBullish and engulfsBody
+    result
+
+// @function Detects Bearish Engulfing pattern
+// @returns true if pattern is detected
+f_isBearishEngulfing() =>
+    bool result = false
+    if bar_index >= 1
+        prevOpen = open[1]
+        prevClose = close[1]
+        currOpen = open
+        currClose = close
+        
+        isPrevBullish = prevClose > prevOpen
+        isCurrBearish = currClose < currOpen
+        engulfsBody = currClose < prevOpen and currOpen > prevClose
+        
+        result := isPrevBullish and isCurrBearish and engulfsBody
+    result
+
+// @function Detects Hammer pattern
+// @returns true if pattern is detected
+f_isHammer() =>
+    bool result = false
+    bodySize = math.abs(close - open)
+    lowerWick = (close > open ? open : close) - low
+    upperWick = high - (close > open ? close : open)
+    totalRange = high - low
+    
+    if totalRange > 0
+        hasLongLowerWick = lowerWick > bodySize * 2
+        hasSmallUpperWick = upperWick < bodySize * 0.5
+        result := hasLongLowerWick and hasSmallUpperWick
+    result
+
+// @function Detects Shooting Star pattern
+// @returns true if pattern is detected
+f_isShootingStar() =>
+    bool result = false
+    bodySize = math.abs(close - open)
+    upperWick = high - (close > open ? close : open)
+    lowerWick = (close > open ? open : close) - low
+    totalRange = high - low
+    
+    if totalRange > 0
+        hasLongUpperWick = upperWick > bodySize * 2
+        hasSmallLowerWick = lowerWick < bodySize * 0.5
+        result := hasLongUpperWick and hasSmallLowerWick
+    result
+
+// @function Detects Piercing Line pattern
+// @returns true if pattern is detected
+f_isPiercingLine() =>
+    bool result = false
+    if bar_index >= 1
+        prevOpen = open[1]
+        prevClose = close[1]
+        currOpen = open
+        currClose = close
+        
+        isPrevBearish = prevClose < prevOpen
+        isCurrBullish = currClose > currOpen
+        opensBelow = currOpen < prevClose
+        closesAboveMid = currClose > (prevOpen + prevClose) / 2
+        
+        result := isPrevBearish and isCurrBullish and opensBelow and closesAboveMid
+    result
+
+// @function Detects Dark Cloud Cover pattern
+// @returns true if pattern is detected
+f_isDarkCloudCover() =>
+    bool result = false
+    if bar_index >= 1
+        prevOpen = open[1]
+        prevClose = close[1]
+        currOpen = open
+        currClose = close
+        
+        isPrevBullish = prevClose > prevOpen
+        isCurrBearish = currClose < currOpen
+        opensAbove = currOpen > prevClose
+        closesBelowMid = currClose < (prevOpen + prevClose) / 2
+        
+        result := isPrevBullish and isCurrBearish and opensAbove and closesBelowMid
+    result
+
+// @function Detects Morning Star pattern
+// @returns true if pattern is detected
+f_isMorningStar() =>
+    bool result = false
+    if bar_index >= 2
+        firstOpen = open[2]
+        firstClose = close[2]
+        secondBody = math.abs(close[1] - open[1])
+        thirdOpen = open
+        thirdClose = close
+        
+        isFirstBearish = firstClose < firstOpen
+        hasSmallSecond = secondBody < math.abs(firstClose - firstOpen) * 0.3
+        isThirdBullish = thirdClose > thirdOpen
+        gapsDown = high[1] < firstClose
+        closesAboveMid = thirdClose > (firstOpen + firstClose) / 2
+        
+        result := isFirstBearish and hasSmallSecond and isThirdBullish and closesAboveMid
+    result
+
+// @function Detects Evening Star pattern
+// @returns true if pattern is detected
+f_isEveningStar() =>
+    bool result = false
+    if bar_index >= 2
+        firstOpen = open[2]
+        firstClose = close[2]
+        secondBody = math.abs(close[1] - open[1])
+        thirdOpen = open
+        thirdClose = close
+        
+        isFirstBullish = firstClose > firstOpen
+        hasSmallSecond = secondBody < math.abs(firstClose - firstOpen) * 0.3
+        isThirdBearish = thirdClose < thirdOpen
+        gapsUp = low[1] > firstClose
+        closesBelowMid = thirdClose < (firstOpen + firstClose) / 2
+        
+        result := isFirstBullish and hasSmallSecond and isThirdBearish and closesBelowMid
+    result
+
+// @function Checks for any bullish reversal pattern
+// @returns true if any bullish pattern is detected
+f_hasBullishReversalPattern() =>
+    f_isBullishEngulfing() or f_isHammer() or f_isPiercingLine() or f_isMorningStar()
+
+// @function Checks for any bearish reversal pattern
+// @returns true if any bearish pattern is detected
+f_hasBearishReversalPattern() =>
+    f_isBearishEngulfing() or f_isShootingStar() or f_isDarkCloudCover() or f_isEveningStar()
+
+// ============================================================================
+// SECTION 5: FVG DETECTION AND STRENGTH CALCULATION
+// ============================================================================
+
+// @function Detects FVG and calculates its strength score
+// @returns New FVG object if detected, na otherwise
+f_detectAndScoreFVG() =>
+    FVG newFvg = na
+    
+    if bar_index >= 2
+        // --- Detection Logic ---
+        bool isBullFVG = low > high[2]
+        bool isBearFVG = high < low[2]
+        
+        if isBullFVG or isBearFVG
+            // --- Strength Calculation ---
+            
+            // 1. Consistency Score (1-3 scale)
+            float consistencyScore = 0.0
+            if isBullFVG
+                // Check if all three candles are bullish
+                isFirst = close[2] > open[2] ? 1.0 : 0.0
+                isSecond = close[1] > open[1] ? 1.0 : 0.0
+                isThird = close > open ? 1.0 : 0.0
+                consistencyScore := isFirst + 1.0 + isThird
+            else
+                // Check if all three candles are bearish
+                isFirst = close[2] < open[2] ? 1.0 : 0.0
+                isSecond = close[1] < open[1] ? 1.0 : 0.0
+                isThird = close < open ? 1.0 : 0.0
+                consistencyScore := isFirst + 1.0 + isThird
+            
+            // 2. Magnitude Score (size vs ATR)
+            float fvgTop = isBullFVG ? low : low[2]
+            float fvgBottom = isBullFVG ? high[2] : high
+            float atr = ta.atr(14)
+            float magnitudeScore = atr > 0 ? (fvgTop - fvgBottom) / atr : 0.0
+            
+            // 3. Volume Score (current vs average)
+            float avgVolume = ta.sma(volume[1], 20)
+            float volumeScore = avgVolume > 0 ? volume[1] / avgVolume : 1.0
+            
+            // 4. Composite Score (normalized to 0-100)
+            float totalWeight = i_consistencyWeight + i_magnitudeWeight + i_volumeWeight
+            int compositeScore = 0
+            
+            if totalWeight > 0
+                normalizedConsistency = consistencyScore / 3.0
+                normalizedMagnitude = math.min(magnitudeScore, 3.0) / 3.0
+                normalizedVolume = math.min(volumeScore, 3.0) / 3.0
+                
+                weightedSum = (normalizedConsistency * i_consistencyWeight) + (normalizedMagnitude * i_magnitudeWeight) + (normalizedVolume * i_volumeWeight)
+                
+                compositeScore := int(math.round((weightedSum / totalWeight) * 100))
+            
+            // --- Create FVG object if it meets minimum size threshold ---
+            if magnitudeScore >= i_fvgAtrThreshold
+                newFvg := FVG.new(fvgTop, fvgBottom, isBullFVG, bar_index, compositeScore, "active", consistencyScore, magnitudeScore, volumeScore, na, na)
+    
+    newFvg
+
+// ============================================================================
+// SECTION 6: FVG STATE MANAGEMENT
+// ============================================================================
+
+// @function Updates the state of all active FVGs
+// @param fvgArray Array of active FVGs
+f_manageFVGState(array<FVG> fvgArray) =>
+    if array.size(fvgArray) > 0
+        for i = array.size(fvgArray) - 1 to 0
+            FVG currentFvg = array.get(fvgArray, i)
+            
+            if currentFvg.state == "active"
+                // Check for Bullish FVG Inversion (price closes below)
+                if currentFvg.isBullish and close < currentFvg.bottom
+                    currentFvg.state := "inverted"
+                
+                // Check for Bearish FVG Inversion (price closes above)
+                if not currentFvg.isBullish and close > currentFvg.top
+                    currentFvg.state := "inverted"
+                
+                // Check for Mitigation (full fill without inversion)
+                if currentFvg.isBullish and high >= currentFvg.top
+                    if currentFvg.state == "active"
+                        currentFvg.state := "mitigated"
+                
+                if not currentFvg.isBullish and low <= currentFvg.bottom
+                    if currentFvg.state == "active"
+                        currentFvg.state := "mitigated"
+            
+            // Remove old mitigated FVGs to keep array clean
+            if currentFvg.state == "mitigated" and bar_index - currentFvg.startBar > 100
+                if na(currentFvg.fvgBox) == false
+                    box.delete(currentFvg.fvgBox)
+                if na(currentFvg.strengthLabel) == false
+                    label.delete(currentFvg.strengthLabel)
+                array.remove(fvgArray, i)
+
+// ============================================================================
+// SECTION 7: SWING HIGH/LOW DETECTION FOR TARGETING
+// ============================================================================
+// Note: Swing detection moved to main execution to allow global var updates
+
+// ============================================================================
+// SECTION 8: SIGNAL GENERATION - REVERSAL FRAMEWORK
+// ============================================================================
+
+// @function Checks for reversal signals at respected FVGs
+// @param fvg The FVG instance to check
+// @returns Signal type string or na
+f_checkForReversalSignal(FVG fvg) =>
+    string signalType = na
+    
+    // Check if price is inside FVG zone
+    bool isInsideFVG = high >= fvg.bottom and low <= fvg.top
+    
+    if isInsideFVG and fvg.state == "active" and fvg.strengthScore >= i_reversalMinScore
+        // --- Bullish Reversal Check ---
+        if fvg.isBullish
+            if f_hasBullishReversalPattern()
+                // Calculate risk/reward
+                if not na(lastSignificantSwingHigh)
+                    target = lastSignificantSwingHigh
+                    entry = close
+                    stop = fvg.bottom
+                    risk = entry - stop
+                    reward = target - entry
+                    rrRatio = risk > 0 ? reward / risk : 0
+                    
+                    if rrRatio >= i_minRiskReward
+                        signalType := "BUY_REVERSAL"
+        
+        // --- Bearish Reversal Check ---
+        else
+            if f_hasBearishReversalPattern()
+                // Calculate risk/reward
+                if not na(lastSignificantSwingLow)
+                    target = lastSignificantSwingLow
+                    entry = close
+                    stop = fvg.top
+                    risk = stop - entry
+                    reward = entry - target
+                    rrRatio = risk > 0 ? reward / risk : 0
+                    
+                    if rrRatio >= i_minRiskReward
+                        signalType := "SELL_REVERSAL"
+    
+    signalType
+
+// ============================================================================
+// SECTION 9: SIGNAL GENERATION - CONTINUATION FRAMEWORK
+// ============================================================================
+
+// @function Checks for continuation signals at inverted FVGs
+// @param fvg The FVG instance to check
+// @returns Signal type string or na
+f_checkForContinuationSignal(FVG fvg) =>
+    string signalType = na
+    
+    // Only check FVGs that were initially weak and are now inverted
+    if fvg.state == "inverted" and fvg.strengthScore <= i_continuationMaxScore
+        // Check if price is retesting the inverted zone
+        bool isRetesting = high >= fvg.bottom and low <= fvg.top
+        
+        if isRetesting
+            // --- Bullish Continuation (former bearish FVG inverted up) ---
+            if not fvg.isBullish
+                // Look for bullish close after retest
+                if close > open
+                    if not na(lastSignificantSwingHigh)
+                        target = lastSignificantSwingHigh
+                        entry = close
+                        stop = fvg.bottom
+                        risk = entry - stop
+                        reward = target - entry
+                        rrRatio = risk > 0 ? reward / risk : 0
+                        
+                        if rrRatio >= i_minRiskReward
+                            signalType := "BUY_CONTINUATION"
+            
+            // --- Bearish Continuation (former bullish FVG inverted down) ---
+            else
+                // Look for bearish close after retest
+                if close < open
+                    if not na(lastSignificantSwingLow)
+                        target = lastSignificantSwingLow
+                        entry = close
+                        stop = fvg.top
+                        risk = stop - entry
+                        reward = entry - target
+                        rrRatio = risk > 0 ? reward / risk : 0
+                        
+                        if rrRatio >= i_minRiskReward
+                            signalType := "SELL_CONTINUATION"
+    
+    signalType
+
+// ============================================================================
+// SECTION 10: VISUAL PLOTTING ENGINE
+// ============================================================================
+
+// @function Draws FVG boxes on the chart
+// @param fvg The FVG instance to draw
+f_drawFVGBox(FVG fvg) =>
+    if i_showFvgBoxes and na(fvg.fvgBox)
+        // Determine box color and border based on state and direction
+        color boxColor = na
+        color borderColor = na
+        int borderWidth = 1
+        
+        if fvg.state == "active"
+            // Active FVGs - Solid colors with lower transparency
+            if fvg.isBullish
+                boxColor := color.new(color.green, 70)
+                borderColor := color.new(color.green, 0)
+            else
+                boxColor := color.new(color.red, 70)
+                borderColor := color.new(color.red, 0)
+            borderWidth := 2
+        else if fvg.state == "inverted"
+            // Inverted FVGs - Different colors for bull/bear with dashed border
+            if fvg.isBullish
+                boxColor := color.new(color.orange, 75)
+                borderColor := color.new(color.orange, 0)
+            else
+                boxColor := color.new(color.aqua, 75)
+                borderColor := color.new(color.aqua, 0)
+            borderWidth := 2
+        else if fvg.state == "mitigated"
+            // Mitigated FVGs - Faded gray
+            boxColor := color.new(color.gray, 85)
+            borderColor := color.new(color.gray, 50)
+            borderWidth := 1
+        
+        // Create box
+        fvg.fvgBox := box.new(fvg.startBar, fvg.top, bar_index + 10, fvg.bottom, border_color=borderColor, border_width=borderWidth, bgcolor=boxColor, extend=extend.right)
+        
+        // Add strength label with state indicator
+        if i_showStrengthLabels and na(fvg.strengthLabel)
+            directionEmoji = fvg.isBullish ? "🟢" : "🔴"
+            statePrefix = fvg.state == "inverted" ? "i" : ""
+            labelText = statePrefix + directionEmoji + str.tostring(fvg.strengthScore)
+            labelY = fvg.isBullish ? fvg.bottom : fvg.top
+            
+            labelStyle = fvg.isBullish ? label.style_label_up : label.style_label_down
+            labelColor = fvg.state == "inverted" ? (fvg.isBullish ? color.new(color.orange, 20) : color.new(color.aqua, 20)) : color.new(color.blue, 20)
+            fvg.strengthLabel := label.new(fvg.startBar, labelY, labelText, style=labelStyle, color=labelColor, textcolor=color.white, size=size.normal)
+    
+    // Update box right edge
+    if not na(fvg.fvgBox)
+        box.set_right(fvg.fvgBox, bar_index + 10)
+
+// Note: Target line plotting moved inline to avoid modifying global vars in functions
+
+// ============================================================================
+// SECTION 11: MAIN EXECUTION LOGIC
+// ============================================================================
+
+// Detect pivot highs for targeting
+pivotHigh = ta.pivothigh(high, i_swingLeftBars, i_swingRightBars)
+if not na(pivotHigh)
+    newPivot = Pivot.new(pivotHigh, bar_index - i_swingRightBars, true)
+    array.push(pivots_major, newPivot)
+    lastSignificantSwingHigh := pivotHigh
+    if array.size(pivots_major) > 50
+        array.shift(pivots_major)
+
+// Detect pivot lows for targeting
+pivotLow = ta.pivotlow(low, i_swingLeftBars, i_swingRightBars)
+if not na(pivotLow)
+    newPivot = Pivot.new(pivotLow, bar_index - i_swingRightBars, false)
+    array.push(pivots_major, newPivot)
+    lastSignificantSwingLow := pivotLow
+    if array.size(pivots_major) > 50
+        array.shift(pivots_major)
+
+// Detect new FVG
+FVG newFvg = f_detectAndScoreFVG()
+if not na(newFvg)
+    array.push(fvgs_active, newFvg)
+    
+    // Limit array size
+    if array.size(fvgs_active) > i_maxFvgsToDisplay
+        oldFvg = array.shift(fvgs_active)
+        if not na(oldFvg.fvgBox)
+            box.delete(oldFvg.fvgBox)
+        if not na(oldFvg.strengthLabel)
+            label.delete(oldFvg.strengthLabel)
+
+// Update FVG states
+f_manageFVGState(fvgs_active)
+
+// Draw FVG boxes and check for signals
+if array.size(fvgs_active) > 0
+    for i = 0 to array.size(fvgs_active) - 1
+        FVG currentFvg = array.get(fvgs_active, i)
+        
+        // Draw FVG box
+        f_drawFVGBox(currentFvg)
+        
+        // Check for reversal signals
+        if i_showReversals
+            reversalSignal = f_checkForReversalSignal(currentFvg)
+            
+            if not na(reversalSignal)
+                if reversalSignal == "BUY_REVERSAL"
+                    label.new(bar_index, low, "BUY\nREVERSAL", style=label.style_label_up, color=color.new(color.green, 20), textcolor=color.white, size=size.normal)
+                    
+                    if not na(lastSignificantSwingHigh)
+                        if not na(currentTargetLine)
+                            line.delete(currentTargetLine)
+                        currentTargetLine := line.new(bar_index, lastSignificantSwingHigh, bar_index + 20, lastSignificantSwingHigh, color=color.new(color.green, 30), width=2, style=line.style_dashed, extend=extend.right)
+                    
+                    alert("Buy Reversal Signal at " + str.tostring(close), alert.freq_once_per_bar)
+                
+                else if reversalSignal == "SELL_REVERSAL"
+                    label.new(bar_index, high, "SELL\nREVERSAL", style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.normal)
+                    
+                    if not na(lastSignificantSwingLow)
+                        if not na(currentTargetLine)
+                            line.delete(currentTargetLine)
+                        currentTargetLine := line.new(bar_index, lastSignificantSwingLow, bar_index + 20, lastSignificantSwingLow, color=color.new(color.red, 30), width=2, style=line.style_dashed, extend=extend.right)
+                    
+                    alert("Sell Reversal Signal at " + str.tostring(close), alert.freq_once_per_bar)
+        
+        // Check for continuation signals
+        if i_showContinuations
+            continuationSignal = f_checkForContinuationSignal(currentFvg)
+            
+            if not na(continuationSignal)
+                if continuationSignal == "BUY_CONTINUATION"
+                    label.new(bar_index, low, "BUY\nCONT", style=label.style_label_up, color=color.new(color.aqua, 20), textcolor=color.white, size=size.normal)
+                    
+                    if not na(lastSignificantSwingHigh)
+                        if not na(currentTargetLine)
+                            line.delete(currentTargetLine)
+                        currentTargetLine := line.new(bar_index, lastSignificantSwingHigh, bar_index + 20, lastSignificantSwingHigh, color=color.new(color.green, 30), width=2, style=line.style_dashed, extend=extend.right)
+                    
+                    alert("Buy Continuation Signal at " + str.tostring(close), alert.freq_once_per_bar)
+                
+                else if continuationSignal == "SELL_CONTINUATION"
+                    label.new(bar_index, high, "SELL\nCONT", style=label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white, size=size.normal)
+                    
+                    if not na(lastSignificantSwingLow)
+                        if not na(currentTargetLine)
+                            line.delete(currentTargetLine)
+                        currentTargetLine := line.new(bar_index, lastSignificantSwingLow, bar_index + 20, lastSignificantSwingLow, color=color.new(color.red, 30), width=2, style=line.style_dashed, extend=extend.right)
+                    
+                    alert("Sell Continuation Signal at " + str.tostring(close), alert.freq_once_per_bar)
+
+// ============================================================================
+// END OF INDICATOR
+// ============================================================================
+

@@ -1,0 +1,631 @@
+//@version=6
+indicator("Retracement Radar v2 Enhanced", "RRv2-Enhanced", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// USER INPUT PARAMETERS
+// ============================================================================
+
+// Symbol Configuration
+symbols_input = input.text_area(title="Symbols to Monitor", defval="BINANCE:BTCUSDT\nBINANCE:ETHUSDT\nBINANCE:BNBUSDT\nBINANCE:SOLUSDT\nBINANCE:XRPUSDT\nBINANCE:ADAUSDT\nBINANCE:AVAXUSDT\nBINANCE:DOGEUSDT\nBINANCE:DOTUSDT\nBINANCE:LINKUSDT\nBINANCE:LTCUSDT\nBINANCE:UNIUSDT\nBINANCE:ATOMUSDT\nBINANCE:TRXUSDT\nBINANCE:NEARUSDT\nBINANCE:ALGOUSDT\nBINANCE:AAVEUSDT\nBINANCE:SUSHIUSDT\nBINANCE:1INCHUSDT", tooltip="Enter symbols to monitor (one per line). Max 20 symbols per script instance.", group="Symbol Configuration")
+
+// Timeframe Configuration
+htf_timeframe = input.timeframe(title="Higher Timeframe for Levels", defval="1D", options=["60", "240", "1D", "2D", "1W", "2W", "1M", "2M", "3M", "6M"], tooltip="Timeframe to use for identifying key levels (support/resistance)", group="Timeframe Configuration")
+
+// Alert Configuration
+enable_alerts = input.bool(title="Enable Webhook Alerts", defval=true, tooltip="Enable/disable webhook alerts to Supabase", group="Alert Configuration")
+
+// Debug Configuration
+show_debug_info = input.bool(title="Show Debug Information", defval=false, tooltip="Display debug information on chart", group="Debug")
+show_alert_markers = input.bool(title="Show Alert Markers", defval=true, tooltip="Display visual markers when alerts are triggered (flags, lines, arrows)", group="Debug")
+
+// ============================================================================
+// ENHANCED STATE MACHINE TYPES
+// ============================================================================
+// State Machine States (0-20):
+// 0: Neutral - Waiting for HTF deviation
+// 1: Deviated Above HTF High
+// 2: Deviated Below HTF Low
+// 3: Returned from Above
+// 4: Returned from Below
+// 5: Bullish - Above 12.5% Retrace
+// 6: Bullish - Above 23.6% Retrace
+// 7: Bullish - Above 25% Retrace
+// 8: Bullish - Above 38.2% Retrace
+// 9: Bullish - Above 50% Retrace
+// 10: Bullish - Above 61.8% Retrace (Golden Ratio)
+// 11: Bullish - Above 78.6% Retrace
+// 12: Bullish - Above 100% (HTF High Broken)
+// 13: Bearish - Below 12.5% Retrace
+// 14: Bearish - Below 23.6% Retrace
+// 15: Bearish - Below 25% Retrace
+// 16: Bearish - Below 38.2% Retrace
+// 17: Bearish - Below 50% Retrace
+// 18: Bearish - Below 61.8% Retrace
+// 19: Bearish - Below 78.6% Retrace
+// 20: Bearish - Below 100% (HTF Low Broken)
+
+type SymbolState
+    string symbol
+    int current_state
+    int prev_state
+    float htf_high
+    float htf_low
+    int htf_bar_index
+    bool low_was_broken
+    bool high_was_broken
+    float retrace_12_5_level
+    float retrace_0_level
+    
+    float retrace_38_2_level
+    float retrace_50_level
+    float retrace_61_8_level
+    float retrace_100_level
+    int test_count
+    int last_update_time
+    string transition_direction
+    string retracement_context
+    string level_interaction_type
+    string momentum
+    int bounce_count
+    float previous_close
+
+// ============================================================================
+// GLOBAL STATE MANAGEMENT
+// ============================================================================
+
+var map<string, SymbolState> g_symbolStateMap = map.new<string, SymbolState>()
+var map<string, string> g_sentStateMap = map.new<string, string>()
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+f_parseSymbols() =>
+    string[] symbols = array.new<string>()
+    if not na(symbols_input) and symbols_input != ""
+        lines = str.split(symbols_input, "\n")
+        for i = 0 to array.size(lines) - 1
+            symbol = str.trim(array.get(lines, i))
+            if symbol != ""
+                array.push(symbols, symbol)
+    symbols
+
+f_generateSymbolKey(symbol) =>
+    str.tostring(symbol) + "|" + htf_timeframe
+
+f_getStateHash(symbolState) =>
+    hash1 = str.tostring(symbolState.current_state) + "|"
+    hash2 = str.tostring(symbolState.test_count) + "|"
+    hash3 = str.tostring(symbolState.htf_high, "#.####") + "|"
+    hash4 = str.tostring(symbolState.htf_low, "#.####") + "|"
+    hash5 = str.tostring(symbolState.last_update_time)
+    hash1 + hash2 + hash3 + hash4 + hash5
+
+f_getStateDescription(state) =>
+    switch state
+        0 => "neutral"
+        1 => "deviated_above"
+        2 => "deviated_below"
+        3 => "returned_from_above"
+        4 => "returned_from_below"
+        5 => "bullish_12_5_retrace"
+        6 => "bullish_23_6_retrace"
+        7 => "bullish_25_retrace"
+        8 => "bullish_38_2_retrace"
+        9 => "bullish_50_retrace"
+        10 => "bullish_61_8_retrace"
+        11 => "bullish_78_6_retrace"
+        12 => "bullish_100_breakout"
+        13 => "bearish_12_5_retrace"
+        14 => "bearish_23_6_retrace"
+        15 => "bearish_25_retrace"
+        16 => "bearish_38_2_retrace"
+        17 => "bearish_50_retrace"
+        18 => "bearish_61_8_retrace"
+        19 => "bearish_78_6_retrace"
+        20 => "bearish_100_breakdown"
+        => "unknown"
+
+f_getTestDirection(state) =>
+    if state >= 5 and state <= 12
+        "from_below"
+    else if state >= 13 and state <= 20
+        "from_above"
+    else if state == 1
+        "from_below"
+    else if state == 2
+        "from_above"
+    else
+        "none"
+
+f_getTransitionDirection(current_state, prev_state, current_close, prev_close) =>
+    if current_state == prev_state
+        "none"
+    else if current_state > prev_state
+        "crossing_up"
+    else
+        "crossing_down"
+
+f_getRetracementContext(state) =>
+    if state >= 5 and state <= 12
+        "bullish_recovery"
+    else if state >= 13 and state <= 20
+        "bearish_continuation"
+    else
+        "neutral"
+
+f_getLevelInteractionType(current_close, prev_close, retrace_level) =>
+    if current_close > retrace_level and prev_close <= retrace_level
+        "breakthrough"
+    else if current_close < retrace_level and prev_close >= retrace_level
+        "rejection"
+    else if math.abs(current_close - retrace_level) < (retrace_level * 0.001)
+        "consolidation"
+    else
+        "approach"
+
+f_getMomentum(current_close, prev_close, htf_high, htf_low) =>
+    if current_close > prev_close and current_close > (htf_high + htf_low) / 2
+        "bullish"
+    else if current_close < prev_close and current_close < (htf_high + htf_low) / 2
+        "bearish"
+    else
+        "neutral"
+
+// ============================================================================
+// DIRECTIONAL CONTEXT HELPER FUNCTIONS
+// ============================================================================
+
+f_determineTransitionDirection(current_state, prev_state, current_close, prev_close) =>
+    if prev_state == 0
+        if current_state >= 13
+            "breakout_down"
+        else if current_state <= 12 and current_state >= 1
+            "breakout_up"
+        else
+            "unknown"
+    else if prev_state >= 13 and current_state <= 12
+        "recovery_up"
+    else if prev_state <= 12 and current_state >= 13
+        "breakdown_down"
+    else if prev_state < current_state and current_close > prev_close
+        "progression_up"
+    else if prev_state > current_state and current_close < prev_close
+        "progression_down"
+    else if current_state >= 13 and current_close > prev_close
+        "bearish_retracement_bullish_momentum"
+    else if current_state <= 12 and current_close < prev_close
+        "bullish_retracement_bearish_momentum"
+    else
+        "lateral"
+
+f_determineRetracementContext(current_state, prev_state, htf_high, htf_low, current_close) =>
+    if current_state >= 13
+        if current_close > (htf_high + htf_low) / 2
+            "bearish_retracement_from_high"
+        else
+            "bearish_continuation"
+    else if current_state <= 12
+        if current_close < (htf_high + htf_low) / 2
+            "bullish_retracement_from_low"
+        else
+            "bullish_continuation"
+    else
+        "neutral_context"
+
+f_determineLevelInteractionType(current_state, prev_state, current_close, level_price) =>
+    if current_state != prev_state
+        if current_close > level_price
+            "breakthrough_above"
+        else if current_close < level_price
+            "breakthrough_below"
+        else
+            "exact_touch"
+    else
+        if current_close > level_price * 1.001
+            "approaching_from_below"
+        else if current_close < level_price * 0.999
+            "approaching_from_above"
+        else
+            "hovering_near_level"
+
+f_calculateBounceCount(current_state, prev_state, symbolState) =>
+    // Determine if we're in the same retracement context (bullish vs bearish)
+    current_is_bearish = current_state >= 13
+    prev_is_bearish = prev_state >= 13
+    
+    // Reset bounce count only when switching between bullish and bearish contexts
+    if current_is_bearish != prev_is_bearish
+        0
+    else
+        // Within the same context, increment bounce count when:
+        // 1. State changes (indicating a bounce between levels)
+        // 2. Or when staying in the same state but price is bouncing
+        if current_state != prev_state
+            // State changed - this indicates a bounce between retracement levels
+            symbolState.bounce_count + 1
+        else
+            // Same state - check if we're at a key level and should count bounces
+            if (current_state >= 13 and current_state <= 20) or (current_state >= 5 and current_state <= 12)
+                // We're in a retracement state, increment bounce count
+                symbolState.bounce_count + 1
+            else
+                symbolState.bounce_count
+
+// Calculate next HTF candle close time
+f_getNextHtfClose() =>
+    current_time = time
+    htf_interval = timeframe.in_seconds(htf_timeframe)
+    current_bar_time = math.floor(current_time / htf_interval) * htf_interval
+    next_close = current_bar_time + htf_interval
+    next_close
+
+// Check if this is a retracement completion (100% hit)
+f_isRetracementCompletion(current_state) =>
+    current_state == 20  // State 20 = 100% retracement
+
+f_buildJsonPayload(symbolState, current_price) =>
+    timestamp = math.round(time * 1000)
+    event_type = f_getStateDescription(symbolState.current_state)
+    test_direction = f_getTestDirection(symbolState.current_state)
+    level_price = symbolState.current_state >= 13 ? symbolState.htf_low : symbolState.htf_high
+    
+    // Check if this is a completion
+    is_completion = f_isRetracementCompletion(symbolState.current_state)
+    htf_close_timestamp = is_completion ? math.round(f_getNextHtfClose() * 1000) : 0
+    retracement_type = symbolState.current_state >= 13 ? "bearish" : "bullish"
+    
+    json1 = '{"event_timestamp":' + str.tostring(timestamp)
+    json2 = ',"ticker":"' + symbolState.symbol + '"'
+    json3 = ',"timeframe":"' + htf_timeframe + '"'
+    json4 = ',"level_price":' + str.tostring(level_price, "#.####")
+    json5 = ',"event_type":"' + event_type + '"'
+    json6 = ',"test_direction":"' + test_direction + '"'
+    json7 = ',"test_count":' + str.tostring(symbolState.test_count)
+    json8 = ',"current_price":' + str.tostring(current_price, "#.####")
+    json9 = ',"state_machine_state":' + str.tostring(symbolState.current_state)
+    json10 = ',"retrace_12_5":' + str.tostring(symbolState.retrace_12_5_level, "#.####")
+    json11 = ',"retrace_23_6":' + str.tostring(symbolState.retrace_23_6_level, "#.####")
+    json12 = ',"retrace_25":' + str.tostring(symbolState.retrace_25_level, "#.####")
+    json13 = ',"retrace_38_2":' + str.tostring(symbolState.retrace_38_2_level, "#.####")
+    json14 = ',"retrace_50":' + str.tostring(symbolState.retrace_50_level, "#.####")
+    json15 = ',"retrace_61_8":' + str.tostring(symbolState.retrace_61_8_level, "#.####")
+    json16 = ',"retrace_78_6":' + str.tostring(symbolState.retrace_78_6_level, "#.####")
+    json17 = ',"low_broken":' + str.tostring(symbolState.low_was_broken)
+    json18 = ',"high_broken":' + str.tostring(symbolState.high_was_broken)
+    json19 = ',"state_description":"' + event_type + '"'
+    json20 = ',"transition_direction":"' + symbolState.transition_direction + '"'
+    json21 = ',"retracement_context":"' + symbolState.retracement_context + '"'
+    json22 = ',"level_interaction_type":"' + symbolState.level_interaction_type + '"'
+    json23 = ',"momentum":"' + symbolState.momentum + '"'
+    json24 = ',"bounce_count":' + str.tostring(symbolState.bounce_count)
+    json25 = ',"is_completion":' + str.tostring(is_completion)
+    json26 = ',"htf_close_timestamp":' + str.tostring(htf_close_timestamp)
+    json27 = ',"retracement_type":"' + retracement_type + '"}'
+    json1 + json2 + json3 + json4 + json5 + json6 + json7 + json8 + json9 + json10 + json11 + json12 + json13 + json14 + json15 + json16 + json17 + json18 + json19 + json20 + json21 + json22 + json23 + json24 + json25 + json26 + json27
+
+// ============================================================================
+// STATE MACHINE LOGIC
+// ============================================================================
+
+f_updateStateMachine(symbolState, current_close, current_high, current_low) =>
+    state_changed = false
+    prev_state = symbolState.current_state
+    symbolState.prev_state := prev_state
+    switch symbolState.current_state
+        0 => 
+            if current_high > symbolState.htf_high
+                symbolState.current_state := 1
+                state_changed := true
+            else if current_low < symbolState.htf_low
+                symbolState.current_state := 2
+                state_changed := true
+        1 => 
+            if current_close < symbolState.htf_high
+                symbolState.current_state := 3
+                state_changed := true
+        2 => 
+            if current_close > symbolState.htf_low
+                symbolState.current_state := 4
+                state_changed := true
+        3 => 
+            if current_close < symbolState.retrace_12_5_level
+                symbolState.current_state := 13
+                state_changed := true
+            else if current_close > symbolState.htf_high
+                symbolState.current_state := 1
+                state_changed := true
+        4 => 
+            if current_close > symbolState.retrace_12_5_level
+                symbolState.current_state := 5
+                state_changed := true
+            else if current_close < symbolState.htf_low
+                symbolState.current_state := 2
+                state_changed := true
+        5 => 
+            if current_close > symbolState.retrace_23_6_level
+                symbolState.current_state := 6
+                state_changed := true
+            else if current_close < symbolState.retrace_12_5_level
+                symbolState.current_state := 4
+                state_changed := true
+        6 => 
+            if current_close > symbolState.retrace_25_level
+                symbolState.current_state := 7
+                state_changed := true
+            else if current_close < symbolState.retrace_23_6_level
+                symbolState.current_state := 5
+                state_changed := true
+        7 => 
+            if current_close > symbolState.retrace_38_2_level
+                symbolState.current_state := 8
+                state_changed := true
+            else if current_close < symbolState.retrace_25_level
+                symbolState.current_state := 6
+                state_changed := true
+        8 => 
+            if current_close > symbolState.retrace_50_level
+                symbolState.current_state := 9
+                state_changed := true
+            else if current_close < symbolState.retrace_38_2_level
+                symbolState.current_state := 7
+                state_changed := true
+        9 => 
+            if current_close > symbolState.retrace_61_8_level
+                symbolState.current_state := 10
+                state_changed := true
+            else if current_close < symbolState.retrace_50_level
+                symbolState.current_state := 8
+                state_changed := true
+        10 => 
+            if current_close > symbolState.retrace_78_6_level
+                symbolState.current_state := 11
+                state_changed := true
+            else if current_close < symbolState.retrace_61_8_level
+                symbolState.current_state := 9
+                state_changed := true
+        11 => 
+            if current_close > symbolState.htf_high
+                symbolState.current_state := 12
+                state_changed := true
+            else if current_close < symbolState.retrace_78_6_level
+                symbolState.current_state := 10
+                state_changed := true
+        12 => 
+            if current_close < symbolState.htf_high
+                symbolState.current_state := 1
+                state_changed := true
+        13 => 
+            if current_close < symbolState.retrace_23_6_level
+                symbolState.current_state := 14
+                state_changed := true
+            else if current_close > symbolState.retrace_12_5_level
+                symbolState.current_state := 3
+                state_changed := true
+        14 => 
+            if current_close < symbolState.retrace_25_level
+                symbolState.current_state := 15
+                state_changed := true
+            else if current_close > symbolState.retrace_23_6_level
+                symbolState.current_state := 13
+                state_changed := true
+        15 => 
+            if current_close < symbolState.retrace_38_2_level
+                symbolState.current_state := 16
+                state_changed := true
+            else if current_close > symbolState.retrace_25_level
+                symbolState.current_state := 14
+                state_changed := true
+        16 => 
+            if current_close < symbolState.retrace_50_level
+                symbolState.current_state := 17
+                state_changed := true
+            else if current_close > symbolState.retrace_38_2_level
+                symbolState.current_state := 15
+                state_changed := true
+        17 => 
+            if current_close < symbolState.retrace_61_8_level
+                symbolState.current_state := 18
+                state_changed := true
+            else if current_close > symbolState.retrace_50_level
+                symbolState.current_state := 16
+                state_changed := true
+        18 => 
+            if current_close < symbolState.retrace_78_6_level
+                symbolState.current_state := 19
+                state_changed := true
+            else if current_close > symbolState.retrace_61_8_level
+                symbolState.current_state := 17
+                state_changed := true
+        19 => 
+            if current_close < symbolState.htf_low
+                symbolState.current_state := 20
+                state_changed := true
+            else if current_close > symbolState.retrace_78_6_level
+                symbolState.current_state := 18
+                state_changed := true
+        20 => 
+            if current_close > symbolState.htf_low
+                symbolState.current_state := 2
+                state_changed := true
+    if state_changed
+        symbolState.test_count += 1
+        symbolState.last_update_time := timenow
+        
+        // Update directional context fields
+        symbolState.transition_direction := f_determineTransitionDirection(symbolState.current_state, prev_state, current_close, symbolState.previous_close)
+        symbolState.retracement_context := f_determineRetracementContext(symbolState.current_state, prev_state, symbolState.htf_high, symbolState.htf_low, current_close)
+        
+        // Determine level interaction type based on current state
+        level_price = symbolState.current_state >= 13 ? symbolState.htf_low : symbolState.htf_high
+        symbolState.level_interaction_type := f_determineLevelInteractionType(symbolState.current_state, prev_state, current_close, level_price)
+        
+        // Update momentum
+        symbolState.momentum := f_getMomentum(current_close, symbolState.previous_close, symbolState.htf_high, symbolState.htf_low)
+        
+        // Calculate bounce count
+        symbolState.bounce_count := f_calculateBounceCount(symbolState.current_state, prev_state, symbolState)
+    
+    // Always update previous close for next iteration
+    symbolState.previous_close := current_close
+    
+    [state_changed, symbolState]
+
+f_calculateRetracements(symbolState) =>
+    htf_range = symbolState.htf_high - symbolState.htf_low
+    retrace_12_5_value = htf_range * 0.125
+    retrace_23_6_value = htf_range * 0.236
+    retrace_25_value = htf_range * 0.25
+    retrace_38_2_value = htf_range * 0.382
+    retrace_50_value = htf_range * 0.50
+    retrace_61_8_value = htf_range * 0.618
+    retrace_78_6_value = htf_range * 0.786
+    if symbolState.low_was_broken
+        symbolState.retrace_12_5_level := symbolState.htf_low + retrace_12_5_value
+        symbolState.retrace_23_6_level := symbolState.htf_low + retrace_23_6_value
+        symbolState.retrace_25_level := symbolState.htf_low + retrace_25_value
+        symbolState.retrace_38_2_level := symbolState.htf_low + retrace_38_2_value
+        symbolState.retrace_50_level := symbolState.htf_low + retrace_50_value
+        symbolState.retrace_61_8_level := symbolState.htf_low + retrace_61_8_value
+        symbolState.retrace_78_6_level := symbolState.htf_low + retrace_78_6_value
+    else if symbolState.high_was_broken
+        symbolState.retrace_12_5_level := symbolState.htf_high - retrace_12_5_value
+        symbolState.retrace_23_6_level := symbolState.htf_high - retrace_23_6_value
+        symbolState.retrace_25_level := symbolState.htf_high - retrace_25_value
+        symbolState.retrace_38_2_level := symbolState.htf_high - retrace_38_2_value
+        symbolState.retrace_50_level := symbolState.htf_high - retrace_50_value
+        symbolState.retrace_61_8_level := symbolState.htf_high - retrace_61_8_value
+        symbolState.retrace_78_6_level := symbolState.htf_high - retrace_78_6_value
+    else
+        symbolState.retrace_12_5_level := symbolState.htf_high - retrace_12_5_value
+        symbolState.retrace_23_6_level := symbolState.htf_high - retrace_23_6_value
+        symbolState.retrace_25_level := symbolState.htf_high - retrace_25_value
+        symbolState.retrace_38_2_level := symbolState.htf_high - retrace_38_2_value
+        symbolState.retrace_50_level := symbolState.htf_high - retrace_50_value
+        symbolState.retrace_61_8_level := symbolState.htf_high - retrace_61_8_value
+        symbolState.retrace_78_6_level := symbolState.htf_high - retrace_78_6_value
+    symbolState
+
+f_processSymbol(symbol) =>
+    [htf_high, htf_low, htf_bar_index, current_high, current_low, current_close] = request.security(symbol, htf_timeframe, [high[1], low[1], bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+    if na(htf_high) or na(htf_low)
+        [false, na, na]
+    else
+        symbol_key = f_generateSymbolKey(symbol)
+        symbolState = map.get(g_symbolStateMap, symbol_key)
+        if na(symbolState)
+            symbolState := SymbolState.new(symbol, 0, 0, htf_high, htf_low, htf_bar_index, false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, "", "", "", "", 0, 0.0)
+            symbolState := f_calculateRetracements(symbolState)
+            map.put(g_symbolStateMap, symbol_key, symbolState)
+        if htf_bar_index != symbolState.htf_bar_index
+            symbolState.htf_high := htf_high
+            symbolState.htf_low := htf_low
+            symbolState.htf_bar_index := htf_bar_index
+            symbolState.current_state := 0
+            symbolState.prev_state := 0
+            symbolState.low_was_broken := false
+            symbolState.high_was_broken := false
+            symbolState := f_calculateRetracements(symbolState)
+            map.put(g_symbolStateMap, symbol_key, symbolState)
+        if current_close < symbolState.htf_low
+            symbolState.low_was_broken := true
+            symbolState.high_was_broken := false
+            symbolState := f_calculateRetracements(symbolState)
+        else if current_close > symbolState.htf_high
+            symbolState.high_was_broken := true
+            symbolState.low_was_broken := false
+            symbolState := f_calculateRetracements(symbolState)
+        [state_changed, updatedState] = f_updateStateMachine(symbolState, current_close, current_high, current_low)
+        if state_changed
+            map.put(g_symbolStateMap, symbol_key, updatedState)
+        [state_changed, updatedState, current_close]
+
+// ============================================================================
+// MAIN EXECUTION
+// ============================================================================
+
+symbols = f_parseSymbols()
+symbol_count = array.size(symbols)
+
+if symbol_count > 20
+    runtime.error("Too many symbols! Maximum 20 symbols allowed per script instance. Current: " + str.tostring(symbol_count))
+
+for i = 0 to symbol_count - 1
+    symbol = array.get(symbols, i)
+    [state_changed, symbolState, symbol_close] = f_processSymbol(symbol)
+    
+    if state_changed and not na(symbolState)
+        symbol_key = f_generateSymbolKey(symbol)
+        current_hash = f_getStateHash(symbolState)
+        last_sent_hash = map.get(g_sentStateMap, symbol_key)
+        
+        if current_hash != last_sent_hash
+            json_payload = f_buildJsonPayload(symbolState, symbol_close)
+            
+            if enable_alerts
+                alert(json_payload, alert.freq_once_per_bar_close)
+            
+            map.put(g_sentStateMap, symbol_key, current_hash)
+            
+            // Create alert trigger markers for visual investigation
+            if show_alert_markers
+                event_desc = f_getStateDescription(symbolState.current_state)
+                
+                // Determine marker color and style based on event type
+                marker_color = if symbolState.current_state >= 5 and symbolState.current_state <= 12
+                    color.new(color.green, 20)  // Bullish events - green
+                else if symbolState.current_state >= 13 and symbolState.current_state <= 20
+                    color.new(color.red, 20)    // Bearish events - red
+                else
+                    color.new(color.orange, 20) // Neutral events - orange
+                
+                // Create prominent alert flag
+                flag_text = "🚨 ALERT\n" + symbol + "\n" + event_desc + "\nState: " + str.tostring(symbolState.current_state) + "\nTests: " + str.tostring(symbolState.test_count)
+                flag_label = label.new(bar_index, high * 1.002, flag_text, color=marker_color, style=label.style_flag, textcolor=color.white, size=size.normal, tooltip="Alert Triggered: " + event_desc + "\nDirection: " + symbolState.transition_direction + "\nContext: " + symbolState.retracement_context)
+                
+                // Add directional context to the flag (tooltip is set in the label.new call above)
+                
+                // Create horizontal line at the level that triggered the alert
+                level_price = symbolState.current_state >= 13 ? symbolState.htf_low : symbolState.htf_high
+                line_color = if symbolState.current_state >= 5 and symbolState.current_state <= 12
+                    color.new(color.blue, 50)
+                else if symbolState.current_state >= 13 and symbolState.current_state <= 20
+                    color.new(color.purple, 50)
+                else
+                    color.new(color.gray, 50)
+                
+                alert_line = line.new(bar_index - 5, level_price, bar_index + 5, level_price, color=line_color, width=2, style=line.style_dashed, extend=extend.none)
+                
+                // Add text annotation on the line
+                line_text = symbol + " " + event_desc
+                line_label = label.new(bar_index, level_price, line_text, color=color.new(color.white, 80), style=label.style_label_left, textcolor=color.white, size=size.tiny)
+                
+                // Create arrow pointing to the price level
+                arrow_color = if symbolState.current_state >= 5 and symbolState.current_state <= 12
+                    color.green
+                else if symbolState.current_state >= 13 and symbolState.current_state <= 20
+                    color.red
+                else
+                    color.orange
+                
+                if symbol_close > level_price
+                    label.new(bar_index, symbol_close, "⬆", color=arrow_color, style=label.style_none, textcolor=arrow_color, size=size.large)
+                else
+                    label.new(bar_index, symbol_close, "⬇", color=arrow_color, style=label.style_none, textcolor=arrow_color, size=size.large)
+
+// ============================================================================
+// VISUALIZATION
+// ============================================================================
+
+if show_debug_info
+    var table info_table = table.new(position.top_right, 3, 5, bgcolor=color.new(color.gray, 80), border_width=1)
+    table.cell(info_table, 0, 0, "Metric", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(info_table, 1, 0, "Value", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(info_table, 0, 1, "Symbols", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(symbol_count), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 2, "HTF", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, htf_timeframe, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 3, "States", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 3, "0-20 (21 total)", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 4, "Enhanced", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 4, "Fibonacci 8 Levels", text_color=color.white, text_size=size.small)

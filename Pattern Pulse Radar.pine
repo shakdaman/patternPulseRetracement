@@ -1,0 +1,707 @@
+//@version=6
+indicator("Pattern Pulse Radar", shorttitle="Pattern Pulse Radar", overlay=true)
+
+// --- USER INPUTS ---
+// Batch Selection System
+batch_group = "Ticker Batch Selection"
+batch_selection = input.string("Batch 1 (8 tickers)", title="Select Ticker Batch", options=["Batch 1 (8 tickers)", "Batch 2 (8 tickers)", "Batch 3 (8 tickers)", "Batch 4 (8 tickers)", "Batch 5 (8 tickers)", "Batch 6 (8 tickers)", "Batch 7 (8 tickers)", "Batch 8 (8 tickers)", "Batch 9 (8 tickers)", "Batch 10 (8 tickers)", "Batch 11 (8 tickers)", "Batch 12 (8 tickers)", "Batch 13 (8 tickers)", "Batch 14 (8 tickers)", "Batch 15 (8 tickers)", "Batch 16 (8 tickers)", "Batch 17 (8 tickers)", "Batch 18 (8 tickers)", "Batch 19 (8 tickers)", "Batch 20 (8 tickers)", "Batch 21 (8 tickers)", "Batch 22 (8 tickers)", "Batch 23 (1 ticker)"], group=batch_group)
+
+// Batch Definitions
+f_get_batch_tickers(batch_name) =>
+    switch batch_name
+        "Batch 1 (8 tickers)" => ["AMEX:BITO", "AMEX:BLOX", "CBOE:BTCI", "CBOE:HOOW", "AMEX:ULTY", "CBOE:WPAY", "AMEX:YMAG", "NASDAQ:AAL"]
+        "Batch 2 (8 tickers)" => ["NYSE:BAC", "NYSE:C", "NYSE:CCL", "NYSE:ET", "NYSE:F", "NASDAQ:INTC", "NASDAQ:KHC", "NYSE:KO"]
+        "Batch 3 (8 tickers)" => ["NYSE:M", "NASDAQ:MARA", "NYSE:MO", "NYSE:NIO", "NYSE:OXY", "NYSE:PFE", "NYSE:PINS", "NASDAQ:RIOT"]
+        "Batch 4 (8 tickers)" => ["NASDAQ:RIVN", "AMEX:SLV", "NYSE:SNAP", "NASDAQ:SOFI", "NYSE:T", "NASDAQ:UAL", "NYSE:VZ", "NYSE:WFC"]
+        "Batch 5 (8 tickers)" => ["NASDAQ:AAPL", "NASDAQ:AMD", "NYSE:BMY", "NYSE:CVNA", "NYSE:DIS", "NASDAQ:GOOGL", "NYSE:MA", "NASDAQ:META"]
+        "Batch 6 (8 tickers)" => ["NASDAQ:MSFT", "NASDAQ:NFLX", "NASDAQ:NVDA", "NASDAQ:PYPL", "NASDAQ:QQQ", "AMEX:SPY", "NYSE:SQ", "NASDAQ:TSLA"]
+        "Batch 7 (8 tickers)" => ["NASDAQ:TSLL", "NYSE:UHS", "AMEX:XLE", "AMEX:XLU", "AMEX:XLK", "AMEX:XLB", "AMEX:XLP", "AMEX:XLC"]
+        "Batch 8 (8 tickers)" => ["AMEX:XLY", "AMEX:XLI", "AMEX:XLV", "AMEX:XLF", "AMEX:XLRE", "NASDAQ:AMZN", "NASDAQ:AUR", "NYSE:AXP"]
+        "Batch 9 (8 tickers)" => ["NYSE:BA", "NYSE:BJ", "NASDAQ:DJT", "NYSE:FL", "NYSE:GME", "NYSE:KBR", "NASDAQ:RIVN", "NASDAQ:ROKU"]
+        "Batch 10 (8 tickers)" => ["NYSE:RTX", "NYSE:SJM", "NYSE:SN", "NYSE:TMO", "NYSE:TSM", "NASDAQ:TXN", "NYSE:V", "AMEX:DIA"]
+        "Batch 11 (8 tickers)" => ["AMEX:GLD", "AMEX:HYG", "AMEX:IWM", "AMEX:SLV", "NASDAQ:TLT", "NASDAQ:ADBE", "NASDAQ:AVGO", "NYSE:CRM"]
+        "Batch 12 (8 tickers)" => ["NYSE:HPE", "NASDAQ:INTC", "NASDAQ:MSFT", "NASDAQ:MSTR", "NASDAQ:MU", "NYSE:ORCL", "NASDAQ:QCOM", "NYSE:GM"]
+        "Batch 13 (8 tickers)" => ["NYSE:HD", "NASDAQ:LCID", "NYSE:MCD", "NYSE:NKE", "NASDAQ:SBUX", "NASDAQ:CMCSA", "NYSE:DIS", "NASDAQ:GOOG"]
+        "Batch 14 (8 tickers)" => ["NASDAQ:NFLX", "NYSE:SNAP", "NYSE:T", "NASDAQ:WBD", "NASDAQ:AFRM", "NYSE:BAC", "NYSE:C", "NASDAQ:COIN"]
+        "Batch 15 (8 tickers)" => ["NYSE:GS", "NYSE:JPM", "NYSE:MS", "NASDAQ:PYPL", "NASDAQ:SOFI", "NYSE:WFC", "AMEX:XLF", "NYSE:XYZ"]
+        "Batch 16 (8 tickers)" => ["NYSE:ABBV", "NASDAQ:AMGN", "NYSE:BDX", "NYSE:BMY", "NYSE:CI", "NYSE:CVS", "NASDAQ:GILD", "NYSE:JNJ"]
+        "Batch 17 (8 tickers)" => ["NYSE:LLY", "NYSE:MRK", "NYSE:PFE", "NYSE:UNH", "NASDAQ:AAL", "NYSE:BA", "NYSE:CAT", "NYSE:DAL"]
+        "Batch 18 (8 tickers)" => ["NYSE:GE", "NASDAQ:HON", "NYSE:LMT", "NASDAQ:UAL", "NYSE:UPS", "NYSE:COP", "NYSE:CVX", "NYSE:DVN"]
+        "Batch 19 (8 tickers)" => ["NYSE:EPD", "NYSE:HAL", "NYSE:MPC", "NYSE:OXY", "NYSE:PSX", "NYSE:SLB", "AMEX:XLE", "NYSE:XOM"]
+        "Batch 20 (8 tickers)" => ["NASDAQ:COST", "NASDAQ:KDP", "NYSE:KO", "NYSE:KR", "NASDAQ:MDLZ", "NYSE:MO", "NASDAQ:PEP", "NYSE:PG"]
+        "Batch 21 (8 tickers)" => ["NYSE:PM", "NYSE:WMT", "NYSE:AA", "NYSE:CLF", "NYSE:FCX", "NYSE:NEM", "NYSE:BEP", "NYSE:DUK"]
+        "Batch 22 (8 tickers)" => ["NYSE:EIX", "NYSE:ES", "NYSE:NEE", "NYSE:NGG", "NYSE:NJR", "NYSE:PCG", "NASDAQ:PLUG", "NYSE:SO"]
+        "Batch 23 (1 ticker)" => ["NASDAQ:TTD", "", "", "", "", "", "", ""]
+        => ["", "", "", "", "", "", "", ""]  // Default: empty batch
+
+// Get selected batch and extract individual tickers
+[t1, t2, t3, t4, t5, t6, t7, t8] = f_get_batch_tickers(batch_selection)
+ticker1 = str.tostring(t1)
+ticker2 = str.tostring(t2)
+ticker3 = str.tostring(t3)
+ticker4 = str.tostring(t4)
+ticker5 = str.tostring(t5)
+ticker6 = str.tostring(t6)
+ticker7 = str.tostring(t7)
+ticker8 = str.tostring(t8)
+
+// Pattern Toggles
+pattern_group = "Pattern Detection Toggles"
+enable_bullish = input.bool(true, "Enable Bullish Patterns", group=pattern_group, inline="bull")
+enable_bearish = input.bool(true, "Enable Bearish Patterns", group=pattern_group, inline="bull")
+enable_strat = input.bool(true, "Enable STRAT Patterns", group=pattern_group, inline="strat")
+
+// Individual Pattern Controls
+bullish_patterns = "Bullish Pattern Controls"
+enable_hammer = input.bool(true, "Hammer", group=bullish_patterns, inline="h1")
+enable_inverted_hammer = input.bool(true, "Inverted Hammer", group=bullish_patterns, inline="h1")
+enable_dragonfly_doji = input.bool(true, "Dragonfly Doji", group=bullish_patterns, inline="h2")
+enable_piercing_line = input.bool(true, "Piercing Line", group=bullish_patterns, inline="h2")
+enable_three_white_soldiers = input.bool(true, "Three White Soldiers", group=bullish_patterns, inline="h3")
+enable_morning_star = input.bool(true, "Morning Star", group=bullish_patterns, inline="h3")
+
+bearish_patterns = "Bearish Pattern Controls"
+enable_hanging_man = input.bool(true, "Hanging Man", group=bearish_patterns, inline="b1")
+enable_shooting_star = input.bool(true, "Shooting Star", group=bearish_patterns, inline="b1")
+enable_gravestone_doji = input.bool(true, "Gravestone Doji", group=bearish_patterns, inline="b2")
+enable_dark_cloud = input.bool(true, "Dark Cloud Cover", group=bearish_patterns, inline="b2")
+enable_three_black_crows = input.bool(true, "Three Black Crows", group=bearish_patterns, inline="b3")
+enable_evening_star = input.bool(true, "Evening Star", group=bearish_patterns, inline="b3")
+
+strat_patterns = "STRAT Pattern Controls"
+enable_inside_bar = input.bool(true, "Inside Bar", group=strat_patterns, inline="s1")
+enable_three_two_combo = input.bool(true, "3-2 Combo", group=strat_patterns, inline="s1")
+
+// Display Settings
+display_group = "Display Settings"
+show_price_data = input.bool(false, "Show Current Prices", group=display_group)
+table_position = input.string("Top Right", "Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=display_group)
+show_performance_info = input.bool(false, "Show Performance Info", group=display_group, tooltip="Display request.security call count and performance metrics")
+
+// --- TYPE DEFINITIONS ---
+type PatternData
+    string pattern_name
+    color pattern_color
+    bool is_detected
+
+type TickerData
+    string symbol
+    array<PatternData> patterns_4h
+    array<PatternData> patterns_1d
+    array<PatternData> patterns_1w
+    array<PatternData> patterns_1m
+    array<PatternData> patterns_3m
+    float price_4h
+    float price_1d
+    float price_1w
+    float price_1m
+    float price_3m
+
+// --- PATTERN DETECTION FUNCTIONS ---
+
+// Helper function to check if candle is doji-like (small body)
+f_is_doji(open_price, close_price, high_price, low_price) =>
+    body_size = math.abs(close_price - open_price)
+    total_range = high_price - low_price
+    total_range > 0 ? body_size / total_range < 0.1 : false
+
+// Helper function to check shadow ratios
+f_get_shadow_ratios(open_price, close_price, high_price, low_price) =>
+    body_size = math.abs(close_price - open_price)
+    upper_shadow = high_price - math.max(open_price, close_price)
+    lower_shadow = math.min(open_price, close_price) - low_price
+    [upper_shadow, lower_shadow, body_size]
+
+// Hammer Pattern Detection (bullish reversal - appears after proper downtrend)
+f_detect_hammer(open_price, close_price, high_price, low_price, prev_close, prev2_close, prev3_close) =>
+    if not enable_hammer or not enable_bullish
+        false
+    else
+        [upper_shadow, lower_shadow, body_size] = f_get_shadow_ratios(open_price, close_price, high_price, low_price)
+        // Hammer: long lower shadow, small body, minimal upper shadow, AND appears after proper downtrend
+        hammer_formation = lower_shadow > 2 * body_size and upper_shadow < body_size and body_size > 0
+        // TREND CONTEXT: Should appear after proper downtrend (at least 2 of last 3 candles showing lower closes)
+        downtrend_context = (prev_close < prev2_close and prev2_close < prev3_close) or (prev_close < prev2_close and prev_close < prev3_close) or (prev2_close < prev3_close and prev_close < prev3_close)
+        hammer_formation and downtrend_context
+
+// Inverted Hammer Pattern Detection (bullish reversal - appears after proper downtrend)
+f_detect_inverted_hammer(open_price, close_price, high_price, low_price, prev_close, prev2_close, prev3_close) =>
+    if not enable_inverted_hammer or not enable_bullish
+        false
+    else
+        [upper_shadow, lower_shadow, body_size] = f_get_shadow_ratios(open_price, close_price, high_price, low_price)
+        // Inverted Hammer: long upper shadow, small body, minimal lower shadow, AND appears after proper downtrend
+        inv_hammer_formation = upper_shadow > 2 * body_size and lower_shadow < body_size and body_size > 0
+        // TREND CONTEXT: Should appear after proper downtrend (at least 2 of last 3 candles showing lower closes)
+        downtrend_context = (prev_close < prev2_close and prev2_close < prev3_close) or (prev_close < prev2_close and prev_close < prev3_close) or (prev2_close < prev3_close and prev_close < prev3_close)
+        inv_hammer_formation and downtrend_context
+
+// Dragonfly Doji Pattern Detection
+f_detect_dragonfly_doji(open_price, close_price, high_price, low_price) =>
+    if not enable_dragonfly_doji or not enable_bullish
+        false
+    else
+        [upper_shadow, lower_shadow, body_size] = f_get_shadow_ratios(open_price, close_price, high_price, low_price)
+        f_is_doji(open_price, close_price, high_price, low_price) and lower_shadow > 2 * body_size and upper_shadow < body_size
+
+// Gravestone Doji Pattern Detection
+f_detect_gravestone_doji(open_price, close_price, high_price, low_price) =>
+    if not enable_gravestone_doji or not enable_bearish
+        false
+    else
+        [upper_shadow, lower_shadow, body_size] = f_get_shadow_ratios(open_price, close_price, high_price, low_price)
+        f_is_doji(open_price, close_price, high_price, low_price) and upper_shadow > 2 * body_size and lower_shadow < body_size
+
+// Hanging Man Pattern Detection (bearish reversal - appears after proper uptrend)
+f_detect_hanging_man(open_price, close_price, high_price, low_price, prev_close, prev2_close, prev3_close) =>
+    if not enable_hanging_man or not enable_bearish
+        false
+    else
+        [upper_shadow, lower_shadow, body_size] = f_get_shadow_ratios(open_price, close_price, high_price, low_price)
+        // Hanging Man: long lower shadow, small body, minimal upper shadow, AND appears after proper uptrend
+        hanging_man_formation = lower_shadow > 2 * body_size and upper_shadow < body_size and body_size > 0
+        // TREND CONTEXT: Should appear after proper uptrend (at least 2 of last 3 candles showing higher closes)
+        uptrend_context = (prev_close > prev2_close and prev2_close > prev3_close) or (prev_close > prev2_close and prev_close > prev3_close) or (prev2_close > prev3_close and prev_close > prev3_close)
+        hanging_man_formation and uptrend_context
+
+// Shooting Star Pattern Detection (bearish reversal - appears after proper uptrend)
+f_detect_shooting_star(open_price, close_price, high_price, low_price, prev_close, prev2_close, prev3_close) =>
+    if not enable_shooting_star or not enable_bearish
+        false
+    else
+        [upper_shadow, lower_shadow, body_size] = f_get_shadow_ratios(open_price, close_price, high_price, low_price)
+        // Shooting Star: long upper shadow, small body, minimal lower shadow, AND appears after proper uptrend
+        shooting_star_formation = upper_shadow > 2 * body_size and lower_shadow < body_size and body_size > 0
+        // TREND CONTEXT: Should appear after proper uptrend (at least 2 of last 3 candles showing higher closes)
+        uptrend_context = (prev_close > prev2_close and prev2_close > prev3_close) or (prev_close > prev2_close and prev_close > prev3_close) or (prev2_close > prev3_close and prev_close > prev3_close)
+        shooting_star_formation and uptrend_context
+
+// Piercing Line Pattern Detection (requires previous candle + trend context)
+f_detect_piercing_line(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close) =>
+    if not enable_piercing_line or not enable_bullish
+        false
+    else
+        // Previous candle should be bearish
+        prev_bearish = prev_close < prev_open
+        // Current candle should be bullish
+        current_bullish = close_price > open_price
+        // Current open should be below previous close
+        gap_down = open_price < prev_close
+        // Current close should penetrate into previous body by at least 50%
+        prev_body_size = prev_open - prev_close
+        penetration = close_price - open_price
+        penetration >= prev_body_size * 0.5 and close_price > (prev_open + prev_close) / 2
+        // TREND CONTEXT: Should appear after proper downtrend (at least 2 of last 3 candles showing lower closes)
+        downtrend_context = (prev_close < prev2_close and prev2_close < prev3_close) or (prev_close < prev2_close and prev_close < prev3_close) or (prev2_close < prev3_close and prev_close < prev3_close)
+        prev_bearish and current_bullish and gap_down and penetration >= prev_body_size * 0.5 and close_price > (prev_open + prev_close) / 2 and downtrend_context
+
+// Dark Cloud Cover Pattern Detection (requires previous candle + trend context)
+f_detect_dark_cloud_cover(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close) =>
+    if not enable_dark_cloud or not enable_bearish
+        false
+    else
+        // Previous candle should be bullish
+        prev_bullish = prev_close > prev_open
+        // Current candle should be bearish
+        current_bearish = close_price < open_price
+        // Current open should be above previous close
+        gap_up = open_price > prev_close
+        // Current close should penetrate into previous body by at least 50%
+        prev_body_size = prev_close - prev_open
+        penetration = open_price - close_price
+        penetration >= prev_body_size * 0.5 and close_price < (prev_open + prev_close) / 2
+        // TREND CONTEXT: Should appear after proper uptrend (at least 2 of last 3 candles showing higher closes)
+        uptrend_context = (prev_close > prev2_close and prev2_close > prev3_close) or (prev_close > prev2_close and prev_close > prev3_close) or (prev2_close > prev3_close and prev_close > prev3_close)
+        prev_bullish and current_bearish and gap_up and penetration >= prev_body_size * 0.5 and close_price < (prev_open + prev_close) / 2 and uptrend_context
+
+// Inside Bar Pattern Detection (requires previous candle)
+f_detect_inside_bar(open_price, close_price, high_price, low_price, prev_high, prev_low) =>
+    if not enable_inside_bar or not enable_strat
+        false
+    else
+        high_price < prev_high and low_price > prev_low
+
+// STRAT 3-2 Combo Pattern Detection (requires 2 candles)
+f_detect_three_two_combo(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_high, prev2_low) =>
+    if not enable_three_two_combo or not enable_strat
+        false
+    else
+        // STRAT 3-2 Combo: Outside Bar (3) followed by Directional Bar (2)
+        // Bar 3 (Outside Bar): Engulfs previous bar - high > prev_high AND low < prev_low
+        // Bar 2 (Directional Bar): Breaks either high or low of the Outside Bar
+        
+        // Check if previous candle (prev) is an Outside Bar (engulfs the candle before it)
+        // We need prev2 data to check if prev is an outside bar, but we'll use current as the directional bar
+        outside_bar = prev_high > prev2_high and prev_low < prev2_low
+        
+        // Current candle (directional bar) must break either high or low of the outside bar
+        breaks_high = high_price > prev_high  // Bullish 2U (breaks above outside bar high)
+        breaks_low = low_price < prev_low     // Bearish 2D (breaks below outside bar low)
+        
+        // Valid 3-2 combo: Outside bar followed by directional break
+        outside_bar and (breaks_high or breaks_low)
+
+// Three White Soldiers Pattern Detection (bullish reversal - requires 3 candles + trend context)
+f_detect_three_white_soldiers(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close) =>
+    if not enable_three_white_soldiers or not enable_bullish
+        false
+    else
+        // Three consecutive bullish candles
+        current_bullish = close_price > open_price
+        prev_bullish = prev_close > prev_open
+        prev2_bullish = prev2_close > prev2_open
+        
+        // Each candle opens within or near previous candle's body
+        current_open_in_prev = open_price >= prev_open and open_price <= prev_close
+        prev_open_in_prev2 = prev_open >= prev2_open and prev_open <= prev2_close
+        
+        // Each candle closes progressively higher
+        progressive_higher = close_price > prev_close and prev_close > prev2_close
+        
+        // Minimal upper shadows (strong buying pressure) - upper shadow < 50% of body
+        current_upper_shadow = high_price - close_price
+        current_body_size = close_price - open_price
+        prev_upper_shadow = prev_high - prev_close
+        prev_body_size = prev_close - prev_open
+        prev2_upper_shadow = prev2_high - prev2_close
+        prev2_body_size = prev2_close - prev2_open
+        
+        minimal_shadows = current_upper_shadow < current_body_size * 0.5 and prev_upper_shadow < prev_body_size * 0.5 and prev2_upper_shadow < prev2_body_size * 0.5
+        
+        // TREND CONTEXT: Should appear after proper downtrend (at least 2 of last 4 candles showing lower closes)
+        downtrend_context = (prev3_close < prev4_close and prev2_close < prev3_close) or (prev3_close < prev4_close and prev_close < prev3_close) or (prev2_close < prev3_close and prev_close < prev3_close)
+        
+        // Pattern formation
+        pattern_formation = current_bullish and prev_bullish and prev2_bullish and current_open_in_prev and prev_open_in_prev2 and progressive_higher and minimal_shadows
+        
+        pattern_formation and downtrend_context
+
+// Three White Soldiers Early Detection (after 2nd candle)
+f_detect_three_white_soldiers_early(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close) =>
+    if not enable_three_white_soldiers or not enable_bullish
+        false
+    else
+        // First two candles must be bullish
+        current_bullish = close_price > open_price
+        prev_bullish = prev_close > prev_open
+        
+        // Second candle opens within first candle's body
+        current_open_in_prev = open_price >= prev_open and open_price <= prev_close
+        
+        // Second candle closes higher than first
+        progressive_higher = close_price > prev_close
+        
+        // Minimal upper shadows
+        current_upper_shadow = high_price - close_price
+        current_body_size = close_price - open_price
+        prev_upper_shadow = prev_high - prev_close
+        prev_body_size = prev_close - prev_open
+        
+        minimal_shadows = current_upper_shadow < current_body_size * 0.5 and prev_upper_shadow < prev_body_size * 0.5
+        
+        // TREND CONTEXT: Should appear after proper downtrend
+        downtrend_context = prev2_close < prev3_close
+        
+        // Early pattern formation (first 2 candles)
+        early_pattern = current_bullish and prev_bullish and current_open_in_prev and progressive_higher and minimal_shadows
+        
+        early_pattern and downtrend_context
+
+// Morning Star Pattern Detection (bullish reversal - requires 3 candles + trend context)
+f_detect_morning_star(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close) =>
+    if not enable_morning_star or not enable_bullish
+        false
+    else
+        // First candle: Large bearish candle
+        first_bearish = prev2_close < prev2_open
+        first_body_size = prev2_open - prev2_close
+        first_total_range = prev2_high - prev2_low
+        first_large_body = first_body_size > first_total_range * 0.6
+        
+        // Second candle: Small-bodied candle with gap down
+        second_small_body = math.abs(prev_close - prev_open) < first_body_size * 0.3
+        gap_down = prev_open < prev2_close  // Gap between first and second candles
+        
+        // Third candle: Large bullish candle that closes well into first candle's body
+        third_bullish = close_price > open_price
+        third_body_size = close_price - open_price
+        third_large_body = third_body_size > first_body_size * 0.5
+        penetration = close_price - prev2_close
+        good_penetration = penetration >= first_body_size * 0.5  // Closes at least halfway into first candle's body
+        
+        // TREND CONTEXT: Should appear after proper downtrend
+        downtrend_context = prev3_close < prev4_close
+        
+        // Pattern formation
+        pattern_formation = first_bearish and first_large_body and second_small_body and gap_down and third_bullish and third_large_body and good_penetration
+        
+        pattern_formation and downtrend_context
+
+// Morning Star Early Detection (after 2nd candle)
+f_detect_morning_star_early(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close) =>
+    if not enable_morning_star or not enable_bullish
+        false
+    else
+        // First candle: Large bearish candle
+        first_bearish = prev2_close < prev2_open
+        first_body_size = prev2_open - prev2_close
+        first_total_range = prev2_high - prev2_low
+        first_large_body = first_body_size > first_total_range * 0.6
+        
+        // Second candle: Small-bodied candle with gap down
+        second_small_body = math.abs(prev_close - prev_open) < first_body_size * 0.3
+        gap_down = prev_open < prev2_close
+        
+        // TREND CONTEXT: Should appear after proper downtrend
+        downtrend_context = prev3_close < prev2_close
+        
+        // Early pattern formation (first 2 candles)
+        early_pattern = first_bearish and first_large_body and second_small_body and gap_down
+        
+        early_pattern and downtrend_context
+
+// Three Black Crows Pattern Detection (bearish reversal - requires 3 candles + trend context)
+f_detect_three_black_crows(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close) =>
+    if not enable_three_black_crows or not enable_bearish
+        false
+    else
+        // Three consecutive bearish candles
+        current_bearish = close_price < open_price
+        prev_bearish = prev_close < prev_open
+        prev2_bearish = prev2_close < prev2_open
+        
+        // Each candle opens within or near previous candle's body
+        current_open_in_prev = open_price >= prev_close and open_price <= prev_open
+        prev_open_in_prev2 = prev_open >= prev2_close and prev_open <= prev2_open
+        
+        // Each candle closes progressively lower
+        progressive_lower = close_price < prev_close and prev_close < prev2_close
+        
+        // Minimal lower shadows (strong selling pressure) - lower shadow < 50% of body
+        current_lower_shadow = open_price - low_price
+        current_body_size = open_price - close_price
+        prev_lower_shadow = prev_open - prev_low
+        prev_body_size = prev_open - prev_close
+        prev2_lower_shadow = prev2_open - prev2_low
+        prev2_body_size = prev2_open - prev2_close
+        
+        minimal_shadows = current_lower_shadow < current_body_size * 0.5 and prev_lower_shadow < prev_body_size * 0.5 and prev2_lower_shadow < prev2_body_size * 0.5
+        
+        // TREND CONTEXT: Should appear after proper uptrend (at least 2 of last 4 candles showing higher closes)
+        uptrend_context = (prev3_close > prev4_close and prev2_close > prev3_close) or (prev3_close > prev4_close and prev_close > prev3_close) or (prev2_close > prev3_close and prev_close > prev3_close)
+        
+        // Pattern formation
+        pattern_formation = current_bearish and prev_bearish and prev2_bearish and current_open_in_prev and prev_open_in_prev2 and progressive_lower and minimal_shadows
+        
+        pattern_formation and uptrend_context
+
+// Three Black Crows Early Detection (after 2nd candle)
+f_detect_three_black_crows_early(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close) =>
+    if not enable_three_black_crows or not enable_bearish
+        false
+    else
+        // First two candles must be bearish
+        current_bearish = close_price < open_price
+        prev_bearish = prev_close < prev_open
+        
+        // Second candle opens within first candle's body
+        current_open_in_prev = open_price >= prev_close and open_price <= prev_open
+        
+        // Second candle closes lower than first
+        progressive_lower = close_price < prev_close
+        
+        // Minimal lower shadows
+        current_lower_shadow = open_price - low_price
+        current_body_size = open_price - close_price
+        prev_lower_shadow = prev_open - prev_low
+        prev_body_size = prev_open - prev_close
+        
+        minimal_shadows = current_lower_shadow < current_body_size * 0.5 and prev_lower_shadow < prev_body_size * 0.5
+        
+        // TREND CONTEXT: Should appear after proper uptrend
+        uptrend_context = prev2_close > prev3_close
+        
+        // Early pattern formation (first 2 candles)
+        early_pattern = current_bearish and prev_bearish and current_open_in_prev and progressive_lower and minimal_shadows
+        
+        early_pattern and uptrend_context
+
+// Evening Star Pattern Detection (bearish reversal - requires 3 candles + trend context)
+f_detect_evening_star(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close) =>
+    if not enable_evening_star or not enable_bearish
+        false
+    else
+        // First candle: Large bullish candle
+        first_bullish = prev2_close > prev2_open
+        first_body_size = prev2_close - prev2_open
+        first_total_range = prev2_high - prev2_low
+        first_large_body = first_body_size > first_total_range * 0.6
+        
+        // Second candle: Small-bodied candle with gap up
+        second_small_body = math.abs(prev_close - prev_open) < first_body_size * 0.3
+        gap_up = prev_open > prev2_close  // Gap between first and second candles
+        
+        // Third candle: Large bearish candle that closes well into first candle's body
+        third_bearish = close_price < open_price
+        third_body_size = open_price - close_price
+        third_large_body = third_body_size > first_body_size * 0.5
+        penetration = prev2_close - close_price
+        good_penetration = penetration >= first_body_size * 0.5  // Closes at least halfway into first candle's body
+        
+        // TREND CONTEXT: Should appear after proper uptrend
+        uptrend_context = prev3_close > prev4_close
+        
+        // Pattern formation
+        pattern_formation = first_bullish and first_large_body and second_small_body and gap_up and third_bearish and third_large_body and good_penetration
+        
+        pattern_formation and uptrend_context
+
+// Evening Star Early Detection (after 2nd candle)
+f_detect_evening_star_early(open_price, close_price, high_price, low_price, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close) =>
+    if not enable_evening_star or not enable_bearish
+        false
+    else
+        // First candle: Large bullish candle
+        first_bullish = prev2_close > prev2_open
+        first_body_size = prev2_close - prev2_open
+        first_total_range = prev2_high - prev2_low
+        first_large_body = first_body_size > first_total_range * 0.6
+        
+        // Second candle: Small-bodied candle with gap up
+        second_small_body = math.abs(prev_close - prev_open) < first_body_size * 0.3
+        gap_up = prev_open > prev2_close
+        
+        // TREND CONTEXT: Should appear after proper uptrend
+        uptrend_context = prev3_close > prev2_close
+        
+        // Early pattern formation (first 2 candles)
+        early_pattern = first_bullish and first_large_body and second_small_body and gap_up
+        
+        early_pattern and uptrend_context
+
+// --- DATA RETRIEVAL FUNCTIONS ---
+
+// Optimized data retrieval: Get all OHLC data in one call per timeframe
+f_get_ticker_data_optimized(ticker_symbol, timeframe_str) =>
+    // Get current and 4 previous bars in one request to minimize security calls
+    [curr_open, curr_high, curr_low, curr_close, prev_open, prev_high, prev_low, prev_close, prev2_open, prev2_high, prev2_low, prev2_close, prev3_open, prev3_high, prev3_low, prev3_close, prev4_open, prev4_high, prev4_low, prev4_close] = request.security(symbol = ticker_symbol, timeframe = timeframe_str, expression = [open, high, low, close, open[1], high[1], low[1], close[1], open[2], high[2], low[2], close[2], open[3], high[3], low[3], close[3], open[4], high[4], low[4], close[4]], lookahead = barmerge.lookahead_off)
+    [curr_open, curr_high, curr_low, curr_close, prev_open, prev_high, prev_low, prev_close, prev2_open, prev2_high, prev2_low, prev2_close, prev3_open, prev3_high, prev3_low, prev3_close, prev4_open, prev4_high, prev4_low, prev4_close]
+
+// Legacy functions for compatibility
+f_get_ticker_data(ticker_symbol, timeframe_str) =>
+    [ticker_open, ticker_high, ticker_low, ticker_close] = request.security(symbol = ticker_symbol, timeframe = timeframe_str, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+    [ticker_open, ticker_high, ticker_low, ticker_close]
+
+f_get_previous_ticker_data(ticker_symbol, timeframe_str) =>
+    [ticker_open_prev, ticker_high_prev, ticker_low_prev, ticker_close_prev] = request.security(symbol = ticker_symbol, timeframe = timeframe_str, expression = [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_off)
+    [ticker_open_prev, ticker_high_prev, ticker_low_prev, ticker_close_prev]
+
+// --- PATTERN ANALYSIS FUNCTION ---
+f_analyze_patterns(ticker_symbol, timeframe_str) =>
+    // Get all OHLC data in one optimized call (reduces security calls from 5 to 1)
+    [current_open, current_high, current_low, current_close, prev_open, prev_high, prev_low, prev_close, prev2_open, prev2_high, prev2_low, prev2_close, prev3_open, prev3_high, prev3_low, prev3_close, prev4_open, prev4_high, prev4_low, prev4_close] = f_get_ticker_data_optimized(ticker_symbol, timeframe_str)
+    
+    // Initialize pattern array
+    var pattern_array = array.new<PatternData>()
+    array.clear(pattern_array)
+    
+    // Detect patterns and add to array
+    // BULLISH PATTERNS (Green)
+    if f_detect_hammer(current_open, current_close, current_high, current_low, prev_close, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("Hammer", color.new(color.green, 20), true))
+    
+    if f_detect_inverted_hammer(current_open, current_close, current_high, current_low, prev_close, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("InvHam", color.new(color.green, 20), true))
+    
+    if f_detect_dragonfly_doji(current_open, current_close, current_high, current_low)
+        array.push(pattern_array, PatternData.new("DragDoj", color.new(color.green, 20), true))
+    
+    if f_detect_piercing_line(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("Pierce", color.new(color.green, 20), true))
+    
+    // NEW BULLISH PATTERNS (Green)
+    if f_detect_three_white_soldiers(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close)
+        array.push(pattern_array, PatternData.new("3WSold", color.new(color.green, 20), true))
+    else if f_detect_three_white_soldiers_early(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("3WSold*", color.new(color.green, 40), true))
+    
+    if f_detect_morning_star(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close)
+        array.push(pattern_array, PatternData.new("MornStr", color.new(color.green, 20), true))
+    else if f_detect_morning_star_early(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close)
+        array.push(pattern_array, PatternData.new("MornStr*", color.new(color.green, 40), true))
+    
+    // BEARISH PATTERNS (Red)
+    if f_detect_hanging_man(current_open, current_close, current_high, current_low, prev_close, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("HangMan", color.new(color.red, 20), true))
+    
+    if f_detect_shooting_star(current_open, current_close, current_high, current_low, prev_close, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("ShootStr", color.new(color.red, 20), true))
+    
+    if f_detect_gravestone_doji(current_open, current_close, current_high, current_low)
+        array.push(pattern_array, PatternData.new("GravDoj", color.new(color.red, 20), true))
+    
+    if f_detect_dark_cloud_cover(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("DarkCl", color.new(color.red, 20), true))
+    
+    // NEW BEARISH PATTERNS (Red)
+    if f_detect_three_black_crows(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close)
+        array.push(pattern_array, PatternData.new("3BCrow", color.new(color.red, 20), true))
+    else if f_detect_three_black_crows_early(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_close, prev3_close)
+        array.push(pattern_array, PatternData.new("3BCrow*", color.new(color.red, 40), true))
+    
+    if f_detect_evening_star(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close, prev4_close)
+        array.push(pattern_array, PatternData.new("EvenStr", color.new(color.red, 20), true))
+    else if f_detect_evening_star_early(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_open, prev2_close, prev2_high, prev2_low, prev3_close)
+        array.push(pattern_array, PatternData.new("EvenStr*", color.new(color.red, 40), true))
+    
+    // STRAT PATTERNS (Grey)
+    if f_detect_inside_bar(current_open, current_close, current_high, current_low, prev_high, prev_low)
+        array.push(pattern_array, PatternData.new("Inside", color.new(color.gray, 20), true))
+    
+    if f_detect_three_two_combo(current_open, current_close, current_high, current_low, prev_open, prev_close, prev_high, prev_low, prev2_high, prev2_low)
+        array.push(pattern_array, PatternData.new("3-2Combo", color.new(color.gray, 20), true))
+    
+    // Return pattern array and current price
+    current_price = current_close
+    [pattern_array, current_price]
+
+// --- TABLE POSITION MAPPING ---
+f_get_table_position(pos_string) =>
+    switch pos_string
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+        => position.top_right
+
+// --- PERFORMANCE MONITORING ---
+// Count total request.security calls: 8 tickers × 5 timeframes × 1 optimized call = 40 calls
+// At the maximum limit for non-professional accounts
+var int total_security_calls = 0
+var int successful_calls = 0
+var int failed_calls = 0
+
+// --- MAIN EXECUTION ---
+if barstate.islast
+    // Reset performance counters
+    total_security_calls := 0
+    successful_calls := 0
+    failed_calls := 0
+    
+    // Create radar table
+    var radar_table = table.new(position = f_get_table_position(table_position), rows = 9, columns = 6, bgcolor = color.new(color.black, 80), border_width = 1, frame_color = color.new(color.white, 50), frame_width = 1)
+    
+    // Create performance info table if enabled (positioned to avoid conflicts with radar table)
+    // Position performance table opposite to radar table
+    perf_position = table_position == "Bottom Right" ? position.top_left : table_position == "Bottom Left" ? position.top_right : table_position == "Top Right" ? position.bottom_left : table_position == "Top Left" ? position.bottom_right : position.bottom_right
+    var perf_table = table.new(position = perf_position, rows = 4, columns = 1, bgcolor = color.new(color.black, 80), border_width = 1, frame_color = color.new(color.yellow, 50), frame_width = 1)
+    
+    // Clear table
+    table.clear(radar_table, 0, 0, 5, 8)
+    
+    // Define timeframes
+    timeframes = array.from<string>("240", "D", "W", "M", "3M")
+    timeframe_labels = array.from<string>("4H", "1D", "1W", "1M", "3M")
+    
+    // Create header row
+    table.cell(radar_table, 0, 0, "TICKER", text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.normal)
+    for i = 0 to array.size(timeframe_labels) - 1
+        table.cell(radar_table, i + 1, 0, array.get(timeframe_labels, i), text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.normal)
+    
+    // Process each ticker
+    tickers = array.from<string>(ticker1, ticker2, ticker3, ticker4, ticker5, ticker6, ticker7, ticker8)
+    
+    for ticker_idx = 0 to array.size(tickers) - 1
+        ticker_symbol = array.get(tickers, ticker_idx)
+        
+        // Display ticker symbol
+        table.cell(radar_table, 0, ticker_idx + 1, ticker_symbol, text_color=color.white, bgcolor=color.new(color.gray, 60), text_size=size.normal)
+        
+        // Analyze patterns for each timeframe
+        for tf_idx = 0 to array.size(timeframes) - 1
+            tf = array.get(timeframes, tf_idx)
+            total_security_calls += 1
+            
+            // Analyze patterns with error handling
+            [patterns, price] = f_analyze_patterns(ticker_symbol, tf)
+            
+            // Check if data retrieval was successful
+            if not na(price) and price > 0
+                successful_calls += 1
+                
+                // Create display text and determine cell color
+                var string pattern_text = ""
+                var color cell_color = color.new(color.black, 80)
+                
+                pattern_text := ""
+                cell_color := color.new(color.gray, 80) // Default: no patterns
+                
+                if array.size(patterns) > 0
+                    // Multiple patterns detected - determine dominant color
+                    var bool has_bullish = false
+                    var bool has_bearish = false
+                    var bool has_strat = false
+                    
+                    for p_idx = 0 to array.size(patterns) - 1
+                        pattern = array.get(patterns, p_idx)
+                        if p_idx > 0
+                            pattern_text += " | "
+                        pattern_text += pattern.pattern_name
+                        
+                        // Categorize patterns
+                        pattern_name = pattern.pattern_name
+                        if pattern_name == "Hammer" or pattern_name == "InvHam" or pattern_name == "DragDoj" or pattern_name == "Pierce" or pattern_name == "3WSold" or pattern_name == "3WSold*" or pattern_name == "MornStr" or pattern_name == "MornStr*"
+                            has_bullish := true
+                        else if pattern_name == "HangMan" or pattern_name == "ShootStr" or pattern_name == "GravDoj" or pattern_name == "DarkCl" or pattern_name == "3BCrow" or pattern_name == "3BCrow*" or pattern_name == "EvenStr" or pattern_name == "EvenStr*"
+                            has_bearish := true
+                        else if pattern_name == "Inside" or pattern_name == "3-2Combo"
+                            has_strat := true
+                    
+                    // Apply color priority: STRAT patterns override others, then Bearish > Bullish
+                    if has_strat
+                        cell_color := color.new(color.gray, 60)
+                    else if has_bearish
+                        cell_color := color.new(color.red, 60)
+                    else if has_bullish
+                        cell_color := color.new(color.green, 60)
+                else
+                    // No patterns detected
+                    pattern_text := show_price_data ? str.tostring(price, "#.##") : "—"
+                
+                // Display in table
+                table.cell(radar_table, tf_idx + 1, ticker_idx + 1, pattern_text, text_color=color.white, bgcolor=cell_color, text_size=size.small)
+            else
+                // Data retrieval failed
+                failed_calls += 1
+                table.cell(radar_table, tf_idx + 1, ticker_idx + 1, "ERROR", text_color=color.red, bgcolor=color.new(color.red, 80), text_size=size.small)
+    
+    // Display performance information if enabled
+    if show_performance_info
+        table.clear(perf_table, 0, 0, 0, 3)
+        table.cell(perf_table, 0, 0, "PERFORMANCE", text_color=color.yellow, bgcolor=color.new(color.black, 70), text_size=size.normal)
+        table.cell(perf_table, 0, 1, "Total Calls: " + str.tostring(total_security_calls), text_color=color.white, text_size=size.small)
+        table.cell(perf_table, 0, 2, "Success: " + str.tostring(successful_calls), text_color=color.green, text_size=size.small)
+        table.cell(perf_table, 0, 3, "Failed: " + str.tostring(failed_calls), text_color=color.red, text_size=size.small)
+    else
+        table.clear(perf_table, 0, 0, 0, 3)
+
+// --- ALERT CONDITIONS ---
+// Enhanced alert system for pattern detection
+// All alert conditions must be at global scope (no conditional blocks)
+
+// Bullish pattern alerts
+alertcondition(enable_bullish, title="Bullish Patterns Active", message="Pattern Pulse Radar monitoring bullish patterns: Hammer, Inverted Hammer, Dragonfly Doji, Piercing Line, Three White Soldiers, Morning Star")
+
+// Bearish pattern alerts  
+alertcondition(enable_bearish, title="Bearish Patterns Active", message="Pattern Pulse Radar monitoring bearish patterns: Hanging Man, Shooting Star, Gravestone Doji, Dark Cloud Cover, Three Black Crows, Evening Star")
+
+// STRAT pattern alerts
+alertcondition(enable_strat, title="STRAT Patterns Active", message="Pattern Pulse Radar monitoring STRAT patterns: Inside Bar, 3-2 Combo")
+
+// General radar status
+alertcondition(true, title="Pattern Radar Active", message="Pattern Pulse Radar monitoring 8 tickers across 5 timeframes")

@@ -4,8 +4,27 @@ indicator("Pattern Pulse D&R Dashboard", shorttitle="Pattern Pulse D&R Dashboard
 // --- Input Controls ---
 i_symbol = input.string("AAPL", "Ticker Symbol", tooltip="Enter the ticker symbol to monitor")
 i_showAlerts = input.bool(true, "Enable State Change Alerts")
-i_dashboardPosition = input.string("top_center", "Dashboard Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
-i_showDebug = input.bool(false, "Show Debug Information")
+i_dashboardPosition = input.string("middle_center", "Dashboard Position", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right", "middle_center", "top_center"])
+i_showDebug = input.bool(true, "Show Debug Information")
+
+// Debug Table Position Settings
+debug_group = "🔧 Debug Settings"
+i_debugMainPosition = input.string("middle_right", "Main Debug Table Position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group=debug_group)
+i_debugStatePosition = input.string("middle_left", "State Debug Table Position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group=debug_group)
+
+// --- Position Conversion Functions ---
+f_get_debug_position(position_str) =>
+    switch position_str
+        "top_left" => position.top_left
+        "top_center" => position.top_center
+        "top_right" => position.top_right
+        "middle_left" => position.middle_left
+        "middle_center" => position.middle_center
+        "middle_right" => position.middle_right
+        "bottom_left" => position.bottom_left
+        "bottom_center" => position.bottom_center
+        "bottom_right" => position.bottom_right
+        => position.top_left
 
 // --- Global Variables ---
 // State tracking for each timeframe
@@ -824,30 +843,30 @@ if barstate.islast
 
 // --- Alerts ---
 if i_showAlerts
-    // Alert on state changes
+    // Alert on state changes with structured format for D&R Radar
     if state_4h != prevState_4h
-        alert("4H State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_4h), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|4H|" + str.tostring(state_4h) + "|" + f_getStateDescription(state_4h), alert.freq_once_per_bar)
     
     if state_daily != prevState_daily
-        alert("Daily State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_daily), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|Daily|" + str.tostring(state_daily) + "|" + f_getStateDescription(state_daily), alert.freq_once_per_bar)
     
     if state_weekly != prevState_weekly
-        alert("Weekly State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_weekly), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|Weekly|" + str.tostring(state_weekly) + "|" + f_getStateDescription(state_weekly), alert.freq_once_per_bar)
     
     if state_monthly != prevState_monthly
-        alert("Monthly State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_monthly), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|Monthly|" + str.tostring(state_monthly) + "|" + f_getStateDescription(state_monthly), alert.freq_once_per_bar)
     
     if state_quarterly != prevState_quarterly
-        alert("Quarterly State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_quarterly), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|Quarterly|" + str.tostring(state_quarterly) + "|" + f_getStateDescription(state_quarterly), alert.freq_once_per_bar)
     
     if state_3m != prevState_3m
-        alert("3M State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_3m), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|3M|" + str.tostring(state_3m) + "|" + f_getStateDescription(state_3m), alert.freq_once_per_bar)
     
     if state_6m != prevState_6m
-        alert("6M State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_6m), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|6M|" + str.tostring(state_6m) + "|" + f_getStateDescription(state_6m), alert.freq_once_per_bar)
     
     if state_1y != prevState_1y
-        alert("1Y State Change: " + syminfo.ticker + " → " + f_getStateDescription(state_1y), alert.freq_once_per_bar)
+        alert("DR_STATE|" + syminfo.ticker + "|1Y|" + str.tostring(state_1y) + "|" + f_getStateDescription(state_1y), alert.freq_once_per_bar)
 
 // --- Debug Information ---
 if i_showDebug and barstate.islast
@@ -880,3 +899,91 @@ if i_showDebug and barstate.islast
     debugText = "HTF DASHBOARD DEBUG - MONTHLY:\n" + breakDetectionText + "\n\n" + retracementText + "\n\n" + stateMachineText + "\n\n" + barIndexText + "\n\n" + priceComparisonText + "\n\nFINAL STATE: " + str.tostring(state_monthly) + " (" + f_getStateDescription(state_monthly) + ")"
     
     label.new(bar_index, high, debugText, style=label.style_label_left, color=color.black, size=size.small)
+
+// --- COMPARABLE DEBUG TABLES FOR RADAR COMPARISON ---
+// Debug META Weekly data (same as radar debug)
+if barstate.islast
+    // Get META Weekly data for comparison with radar
+    [debug_htf_high_wk, debug_htf_low_wk, debug_confirmed_wk, debug_bar_index_wk, debug_high_wk, debug_low_wk, debug_close_wk] = request.security("NASDAQ:META", "1W", [high, low, barstate.isconfirmed, bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+    
+    // Dashboard debug table (user-configurable position)
+    var dashboard_debug_table = table.new(f_get_debug_position(i_debugMainPosition), 4, 8, bgcolor=color.white, border_width=1)
+    table.cell(dashboard_debug_table, 0, 0, "Dashboard META WK", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 0, "Value", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 0, "Status", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 1, "HTF High", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 1, str.tostring(debug_htf_high_wk), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 1, na(debug_htf_high_wk) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 2, "HTF Low", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 2, str.tostring(debug_htf_low_wk), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 2, na(debug_htf_low_wk) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 3, "Ticker High", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 3, str.tostring(debug_high_wk), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 3, na(debug_high_wk) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 4, "Ticker Low", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 4, str.tostring(debug_low_wk), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 4, na(debug_low_wk) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 5, "Ticker Close", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 5, str.tostring(debug_close_wk), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 5, na(debug_close_wk) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 6, "Confirmed", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 6, str.tostring(debug_confirmed_wk), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 6, debug_confirmed_wk ? "YES" : "NO", text_color=color.black, text_size=size.normal)
+    
+    table.cell(dashboard_debug_table, 0, 7, "Weekly State", text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 1, 7, str.tostring(state_weekly), text_color=color.black, text_size=size.normal)
+    table.cell(dashboard_debug_table, 2, 7, f_getStateDescription(state_weekly), text_color=color.black, text_size=size.normal)
+    
+    // Dashboard state calculation debug (same logic as radar)
+    if not na(debug_htf_high_wk) and not na(debug_htf_low_wk) and not na(debug_close_wk)
+        // Use dashboard's actual break detection and retracement levels
+        debug_dash_lowWasBroken = lowWasBroken_weekly
+        debug_dash_highWasBroken = highWasBroken_weekly
+        
+        // Dashboard state calculation debug table (user-configurable position)
+        var dashboard_state_table = table.new(f_get_debug_position(i_debugStatePosition), 3, 10, bgcolor=color.white, border_width=1)
+        table.cell(dashboard_state_table, 0, 0, "Dashboard State Debug - " + syminfo.ticker + " 1W", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 0, "Value", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 0, "Result", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 1, "Low Broken", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 1, str.tostring(debug_dash_lowWasBroken), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 1, debug_dash_lowWasBroken ? "YES" : "NO", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 2, "High Broken", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 2, str.tostring(debug_dash_highWasBroken), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 2, debug_dash_highWasBroken ? "YES" : "NO", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 3, "Bullish 25%", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 3, str.tostring(bullish25Level_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 3, "Level", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 4, "Bullish 50%", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 4, str.tostring(bullish50Level_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 4, "Level", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 5, "Bearish 25%", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 5, str.tostring(bearish25Level_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 5, "Level", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 6, "Bearish 50%", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 6, str.tostring(bearish50Level_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 6, "Level", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 7, "Close vs Bull25", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 7, str.tostring(currentClose > bullish25Level_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 7, currentClose > bullish25Level_weekly ? "ABOVE" : "BELOW", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 8, "Close vs Bear25", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 8, str.tostring(currentClose < bearish25Level_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 8, currentClose < bearish25Level_weekly ? "BELOW" : "ABOVE", text_color=color.black, text_size=size.normal)
+        
+        table.cell(dashboard_state_table, 0, 9, "DASH STATE", text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 1, 9, str.tostring(state_weekly), text_color=color.black, text_size=size.normal)
+        table.cell(dashboard_state_table, 2, 9, f_getStateDescription(state_weekly), text_color=color.black, text_size=size.normal)

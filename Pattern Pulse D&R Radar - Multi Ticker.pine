@@ -1,0 +1,700 @@
+//@version=6
+indicator("Pattern Pulse D&R Radar - Multi Ticker", shorttitle="D&R Radar Multi", overlay=true)
+
+// --- Input Controls ---
+// Batch Selection System (same as Pattern Radar)
+batch_group = "📊 Ticker Configuration"
+batch_selection = input.string("Batch 2 (8 tickers)", title="Select Ticker Batch", options=["Batch 1 (8 tickers)", "Batch 2 (8 tickers)", "Batch 3 (8 tickers)", "Batch 4 (8 tickers)", "Batch 5 (8 tickers)", "Batch 6 (8 tickers)", "Batch 7 (8 tickers)", "Batch 8 (8 tickers)", "Batch 9 (8 tickers)", "Batch 10 (8 tickers)", "Batch 11 (8 tickers)", "Batch 12 (8 tickers)", "Batch 13 (8 tickers)", "Batch 14 (8 tickers)", "Batch 15 (8 tickers)", "Batch 16 (8 tickers)", "Batch 17 (8 tickers)", "Batch 18 (8 tickers)", "Batch 19 (8 tickers)", "Batch 20 (8 tickers)", "Batch 21 (8 tickers)", "Batch 22 (8 tickers)", "Batch 23 (1 ticker)"], group=batch_group)
+
+// Display Settings
+display_group = "📈 Display Settings"
+table_position = input.string("Middle Center", title="Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=display_group)
+show_performance_info = input.bool(false, title="Show Performance Info", group=display_group)
+show_debug_info = input.bool(true, title="Show Debug Information", group=display_group)
+
+// Debug Table Position Settings
+debug_group = "🔧 Debug Settings"
+debug_main_position = input.string("Middle Right", title="Main Debug Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=debug_group)
+debug_state_position = input.string("Middle Left", title="State Debug Table Position", options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=debug_group)
+
+// --- Batch Selection Function ---
+f_get_batch_tickers(batch_name) =>
+    switch batch_name
+        "Batch 1 (8 tickers)" => ["AMEX:BITO", "AMEX:BLOX", "CBOE:BTCI", "CBOE:HOOW", "AMEX:ULTY", "CBOE:WPAY", "AMEX:YMAG", "NASDAQ:AAL"]
+        "Batch 2 (8 tickers)" => ["NASDAQ:AAPL", "NASDAQ:MSFT", "NASDAQ:GOOGL", "NASDAQ:AMZN", "NASDAQ:TSLA", "NASDAQ:META", "NASDAQ:NVDA", "NYSE:ORCL"]
+        "Batch 3 (8 tickers)" => ["NYSE:JPM", "NYSE:BAC", "NYSE:WFC", "NYSE:C", "NYSE:GS", "NYSE:MS", "NYSE:AXP", "NYSE:USB"]
+        "Batch 4 (8 tickers)" => ["NYSE:XOM", "NYSE:CVX", "NYSE:COP", "NYSE:EOG", "NYSE:SLB", "NYSE:KMI", "NYSE:WMB", "NYSE:OKE"]
+        "Batch 5 (8 tickers)" => ["NYSE:JNJ", "NYSE:PFE", "NYSE:UNH", "NYSE:ABBV", "NYSE:MRK", "NYSE:TMO", "NYSE:ABT", "NYSE:DHR"]
+        "Batch 6 (8 tickers)" => ["NYSE:KO", "NYSE:PEP", "NYSE:PG", "NYSE:WMT", "NYSE:HD", "NYSE:COST", "NYSE:TGT", "NYSE:LOW"]
+        "Batch 7 (8 tickers)" => ["NASDAQ:INTC", "NASDAQ:AMD", "NASDAQ:QCOM", "NASDAQ:AVGO", "NASDAQ:TXN", "NASDAQ:ADI", "NASDAQ:MRVL", "NASDAQ:AMAT"]
+        "Batch 8 (8 tickers)" => ["NYSE:V", "NYSE:MA", "NYSE:AXP", "NYSE:COF", "NYSE:DFS", "NYSE:FISV", "NYSE:FIS", "NYSE:GPN"]
+        "Batch 9 (8 tickers)" => ["NYSE:BA", "NYSE:RTX", "NYSE:LMT", "NYSE:NOC", "NYSE:GD", "NYSE:TXT", "NYSE:TDG", "NYSE:TDY"]
+        "Batch 10 (8 tickers)" => ["NYSE:UNP", "NYSE:CSX", "NYSE:NSC", "NYSE:CP", "NYSE:KSU", "NYSE:CNI", "NYSE:CNP", "NYSE:CP"]
+        "Batch 11 (8 tickers)" => ["NYSE:SPY", "NASDAQ:QQQ", "NYSE:IWM", "NASDAQ:IWO", "NYSE:EFA", "NYSE:EEM", "NYSE:VTI", "NYSE:VEA"]
+        "Batch 12 (8 tickers)" => ["NYSE:GLD", "NYSE:SLV", "NYSE:GDX", "NYSE:GDXJ", "NYSE:SIL", "NYSE:COPX", "NYSE:REMX", "NYSE:URA"]
+        "Batch 13 (8 tickers)" => ["NASDAQ:ARKK", "NASDAQ:ARKQ", "NASDAQ:ARKW", "NASDAQ:ARKG", "NASDAQ:ARKF", "NYSE:XLK", "NYSE:XLF", "NYSE:XLE"]
+        "Batch 14 (8 tickers)" => ["NYSE:XLU", "NYSE:XLI", "NYSE:XLV", "NYSE:XLY", "NYSE:XLP", "NYSE:XLB", "NYSE:XLRE", "NYSE:XLK"]
+        "Batch 15 (8 tickers)" => ["NASDAQ:QQEW", "NASDAQ:QQXT", "NASDAQ:QQEW", "NASDAQ:QQXT", "NASDAQ:QQEW", "NASDAQ:QQXT", "NASDAQ:QQEW", "NASDAQ:QQXT"]
+        "Batch 16 (8 tickers)" => ["NYSE:SPXL", "NYSE:SPXS", "NYSE:TQQQ", "NYSE:SQQQ", "NYSE:UPRO", "NYSE:SPXU", "NYSE:TMF", "NYSE:TMV"]
+        "Batch 17 (8 tickers)" => ["NYSE:VXX", "NYSE:UVXY", "NYSE:SVXY", "NYSE:XIV", "NYSE:VIXY", "NYSE:VIXM", "NYSE:VXXB", "NYSE:UVXY"]
+        "Batch 18 (8 tickers)" => ["NYSE:HYG", "NYSE:JNK", "NYSE:LQD", "NYSE:AGG", "NYSE:BND", "NYSE:TLT", "NYSE:IEF", "NYSE:SHY"]
+        "Batch 19 (8 tickers)" => ["NYSE:GLD", "NYSE:IAU", "NYSE:SLV", "NYSE:PSLV", "NYSE:GDX", "NYSE:GDXJ", "NYSE:SIL", "NYSE:SILJ"]
+        "Batch 20 (8 tickers)" => ["NYSE:USO", "NYSE:UNG", "NYSE:UCO", "NYSE:SCO", "NYSE:BOIL", "NYSE:KOLD", "NYSE:UGAZ", "NYSE:DGAZ"]
+        "Batch 21 (8 tickers)" => ["NYSE:CORN", "NYSE:SOYB", "NYSE:WEAT", "NYSE:CANE", "NYSE:JO", "NYSE:BAL", "NYSE:NIB", "NYSE:COW"]
+        "Batch 22 (8 tickers)" => ["NYSE:FXE", "NYSE:FXY", "NYSE:UUP", "NYSE:UDN", "NYSE:EUO", "NYSE:YCS", "NYSE:CYB", "NYSE:INR"]
+        "Batch 23 (1 ticker)" => ["NASDAQ:META", "NASDAQ:META", "NASDAQ:META", "NASDAQ:META", "NASDAQ:META", "NASDAQ:META", "NASDAQ:META", "NASDAQ:META"]
+        => ["NASDAQ:AAPL", "NASDAQ:MSFT", "NASDAQ:GOOGL", "NASDAQ:AMZN", "NASDAQ:TSLA", "NASDAQ:META", "NASDAQ:NVDA", "NYSE:ORCL"]
+
+// Get selected tickers and convert to array
+[t1, t2, t3, t4, t5, t6, t7, t8] = f_get_batch_tickers(batch_selection)
+tickers = array.from(t1, t2, t3, t4, t5, t6, t7, t8)
+timeframes = array.from("1D", "1W", "1M", "3M", "6M")
+
+// --- Position Conversion Functions ---
+f_get_debug_position(position_str) =>
+    switch position_str
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+        => position.middle_center
+
+f_get_radar_position(position_str) =>
+    switch position_str
+        "Top Left" => position.top_left
+        "Top Center" => position.top_center
+        "Top Right" => position.top_right
+        "Middle Left" => position.middle_left
+        "Middle Center" => position.middle_center
+        "Middle Right" => position.middle_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right" => position.bottom_right
+        => position.top_left
+
+// --- State Description Function (EXACT copy from Dashboard) ---
+f_getStateDescription(state) =>
+    switch state
+        0 => "Neutral"
+        1 => "Deviated Above"
+        2 => "Deviated Below"
+        3 => "Returned from Above"
+        4 => "Returned from Below"
+        5 => "Bullish 25%"
+        6 => "Bullish 50%"
+        7 => "Bullish 100%"
+        8 => "Bullish Fell 50%"
+        9 => "Bullish Fell 25%"
+        10 => "Bearish 25%"
+        11 => "Bearish 50%"
+        12 => "Bearish 100%"
+        13 => "Bearish Rose 50%"
+        14 => "Bearish Rose 25%"
+        => "Unknown"
+
+// --- State Color Function (EXACT copy from Dashboard) ---
+f_getStateColor(state) =>
+    switch state
+        0 => color.gray
+        1 => color.blue
+        2 => color.orange
+        3 => color.purple
+        4 => color.purple
+        5 => color.new(color.green, 20)
+        6 => color.new(color.green, 0)
+        7 => color.new(color.lime, 0)
+        8 => color.new(color.green, 40)
+        9 => color.new(color.green, 60)
+        10 => color.new(color.red, 20)
+        11 => color.new(color.red, 0)
+        12 => color.new(color.maroon, 0)
+        13 => color.new(color.red, 40)
+        14 => color.new(color.red, 60)
+        => color.gray
+
+// --- State Machine Function (MODIFIED for multi-ticker) ---
+f_getState(htfHigh, htfLow, currentHigh, currentLow, currentClose, currentState, bullish25Level, bullish50Level, bearish25Level, bearish50Level) =>
+    newState = currentState
+    
+    // HTF bar reset logic DISABLED for multi-ticker compatibility
+    // The [1] indexing doesn't work reliably with multiple tickers due to different bar timing
+    // This allows the state machine to function without constant resets to neutral
+    
+    // Apply the state machine logic
+    switch currentState
+        0 => // Neutral state: waiting for a deviation.
+            if currentHigh > htfHigh
+                newState := 1 // Price deviated above.
+            else if currentLow < htfLow
+                newState := 2 // Price deviated below.
+        1 => // Deviated Above state: waiting for return to range.
+            if currentClose < htfHigh
+                // Check retracement levels to determine appropriate state
+                if currentClose < bearish50Level
+                    newState := 11 // Direct to Bearish 50% if below 50% retrace
+                else if currentClose < bearish25Level
+                    newState := 10 // Direct to Bearish 25% if below 25% retrace
+                else
+                    newState := 3 // Price has returned to range
+        2 => // Deviated Below state: waiting for return to range.
+            if currentClose > htfLow
+                // Check retracement levels to determine appropriate state
+                if currentClose > bullish50Level
+                    newState := 6 // Direct to Bullish 50% if above 50% retrace
+                else if currentClose > bullish25Level
+                    newState := 5 // Direct to Bullish 25% if above 25% retrace
+                else
+                    newState := 4 // Price has returned to range
+            3 => // Returned from Above: now track bearish retracements
+                if currentClose < bearish25Level
+                    newState := 10 // Bearish - Below 25% Retrace
+                else if currentClose > htfHigh
+                    newState := 1 // Back to deviated above
+            4 => // Returned from Below: now track bullish retracements
+                if currentClose > bullish25Level
+                    newState := 5 // Bullish - Above 25% Retrace
+                else if currentClose < htfLow
+                    newState := 2 // Back to deviated below
+            5 => // Bullish Above 25%: track progression or retracement
+                if currentClose > bullish50Level
+                    newState := 6 // Bullish - Above 50% Retrace
+                else if currentClose < bullish25Level
+                    newState := 9 // Bullish - Fell Below 25% (retracement)
+            6 => // Bullish Above 50%: track progression or retracement
+                if currentClose > htfHigh
+                    newState := 7 // Bullish - Above 100% (HTF High broken)
+                else if currentClose < bullish50Level
+                    newState := 8 // Bullish - Fell Below 50% (retracement)
+            7 => // Bullish Above 100% (HTF High): track continuation or false break
+                if currentClose < htfHigh
+                    newState := 1 // False break - back to deviated above
+                // If continues above HTF High, stay in state 7 or reset to 0 for new cycle
+            8 => // Bullish Fell Below 50%: track recovery or deeper retracement
+                if currentClose > bullish50Level
+                    newState := 6 // Recovery - back above 50%
+                else if currentClose < bullish25Level
+                    newState := 9 // Deeper retracement - below 25%
+            9 => // Bullish Fell Below 25%: track recovery
+                if currentClose > bullish25Level
+                    newState := 5 // Recovery - back above 25%
+                else if currentClose < htfLow
+                    newState := 2 // Back to deviated below
+            10 => // Bearish Below 25%: track progression or retracement
+                if currentClose < bearish50Level
+                    newState := 11 // Bearish - Below 50% Retrace
+                else if currentClose > bearish25Level
+                    newState := 14 // Bearish - Rose Above 25% (retracement)
+            11 => // Bearish Below 50%: track progression or retracement
+                if currentClose < htfLow
+                    newState := 12 // Bearish - Below 100% (HTF Low broken)
+                else if currentClose > bearish50Level
+                    newState := 13 // Bearish - Rose Above 50% (retracement)
+            12 => // Bearish Below 100% (HTF Low): track continuation or false break
+                if currentClose > htfLow
+                    newState := 2 // False break - back to deviated below
+                // If continues below HTF Low, stay in state 12 or reset to 0 for new cycle
+            13 => // Bearish Rose Above 50%: track recovery or deeper retracement
+                if currentClose < bearish50Level
+                    newState := 11 // Recovery - back below 50%
+                else if currentClose > bearish25Level
+                    newState := 14 // Deeper retracement - above 25%
+            14 => // Bearish Rose Above 25%: track recovery
+                if currentClose < bearish25Level
+                    newState := 10 // Recovery - back below 25%
+                else if currentClose > htfHigh
+                    newState := 1 // Back to deviated above
+        
+        newState
+    
+    newState
+
+// --- Multi-Ticker D&R Logic (Dashboard Pattern Expanded) ---
+// For each ticker, we need to track states for each timeframe
+// This follows the EXACT same pattern as Dashboard but for multiple tickers
+
+// Get current chart's prices (same as Dashboard)
+currentHigh = high
+currentLow = low  
+currentClose = close
+
+// --- Process Each Ticker (Optimized for 40-call limit) ---
+// We'll process each ticker with all timeframes in a single request.security call
+
+// Initialize arrays to store results for each ticker/timeframe combination
+var array<int> ticker_states = array.new<int>()
+var array<string> ticker_symbols = array.new<string>()
+var array<string> timeframe_strings = array.new<string>()
+
+// Initialize HTF storage arrays (CRITICAL: Declare outside loop to persist across iterations)
+var array<float> stored_htf_high_array = array.new<float>()
+var array<float> stored_htf_low_array = array.new<float>()
+
+// Initialize retracement level arrays (CRITICAL: Declare outside loop to persist across iterations)
+var array<float> bullish25Level_array = array.new<float>()
+var array<float> bullish50Level_array = array.new<float>()
+var array<float> bearish25Level_array = array.new<float>()
+var array<float> bearish50Level_array = array.new<float>()
+
+// Initialize arrays on first bar
+if barstate.isfirst
+    for ticker_idx = 0 to array.size(tickers) - 1
+        for tf_idx = 0 to array.size(timeframes) - 1
+            array.push(ticker_symbols, array.get(tickers, ticker_idx))
+            array.push(timeframe_strings, array.get(timeframes, tf_idx))
+            array.push(ticker_states, 0) // Initialize all states to 0 (Neutral)
+            // Initialize HTF storage arrays
+            array.push(stored_htf_high_array, na)
+            array.push(stored_htf_low_array, na)
+            // Initialize retracement level arrays
+            array.push(bullish25Level_array, na)
+            array.push(bullish50Level_array, na)
+            array.push(bearish25Level_array, na)
+            array.push(bearish50Level_array, na)
+
+// Initialize break detection arrays
+var array<bool> low_was_broken_array = array.new<bool>()
+var array<bool> high_was_broken_array = array.new<bool>()
+
+// Initialize break detection arrays on first bar
+if barstate.isfirst
+    for i = 0 to array.size(ticker_symbols) - 1
+        array.push(low_was_broken_array, false)
+        array.push(high_was_broken_array, false)
+
+// Global debug break detection variables (persistent across bars)
+var bool debug_break_lowWasBroken = false
+var bool debug_break_highWasBroken = false
+
+// Process each ticker/timeframe combination (limit to 7 tickers to stay under 40 calls: 7×5=35 + 1 debug = 36)
+max_tickers = math.min(array.size(tickers), 7) // Limit to 7 tickers to stay under 40-call limit
+
+// Process each ticker/timeframe combination individually
+for i = 0 to array.size(ticker_symbols) - 1
+    ticker_symbol = array.get(ticker_symbols, i)
+    timeframe_str = array.get(timeframe_strings, i)
+    current_state = array.get(ticker_states, i)
+    
+    // Get HTF data for this specific ticker/timeframe (EXACT same as Dashboard)
+    [htfHigh_raw, htfLow_raw, htfConfirmed, htfBarIndex, tickerHigh, tickerLow, tickerClose] = request.security(ticker_symbol, timeframe_str, [high, low, barstate.isconfirmed, bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+    
+    // Store HTF values when valid (not just when confirmed - for multi-ticker compatibility)
+    // The dashboard uses syminfo.tickerid so confirmation timing aligns perfectly
+    // For multiple tickers, we need to store HTF data more aggressively
+    if not na(htfHigh_raw) and not na(htfLow_raw)
+        array.set(stored_htf_high_array, i, htfHigh_raw)
+        array.set(stored_htf_low_array, i, htfLow_raw)
+    
+    // Use stored values for calculations (EXACT same as Dashboard)
+    ticker_htfHigh = array.get(stored_htf_high_array, i)
+    ticker_htfLow = array.get(stored_htf_low_array, i)
+    
+    // Use ticker's current prices for break detection (NOT current chart's prices)
+    ticker_currentHigh = tickerHigh
+    ticker_currentLow = tickerLow
+    ticker_currentClose = tickerClose
+    
+    // Break Detection Logic (EXACT same as Dashboard)
+    // Get current break detection values from arrays
+    current_low_was_broken = array.get(low_was_broken_array, i)
+    current_high_was_broken = array.get(high_was_broken_array, i)
+    
+    // Reset when new HTF bar forms (DISABLED for multi-ticker debugging)
+    // For multi-ticker, the [1] indexing approach doesn't work reliably due to different bar timing
+    // Let's disable this reset logic temporarily to see if the state machine works without it
+    // TODO: Implement proper HTF bar detection for multi-ticker scenarios
+    // if ticker_htfHigh != ticker_htfHigh[1] or ticker_htfLow != ticker_htfLow[1]
+    //     current_low_was_broken := false
+    //     current_high_was_broken := false
+    
+    // Detect breaks (EXACT same as Dashboard)
+    if not na(ticker_htfLow) and ticker_currentLow < ticker_htfLow
+        current_low_was_broken := true
+        current_high_was_broken := false
+    if not na(ticker_htfHigh) and ticker_currentHigh > ticker_htfHigh
+        current_high_was_broken := true
+        current_low_was_broken := false
+    
+    // Update arrays with new values
+    array.set(low_was_broken_array, i, current_low_was_broken)
+    array.set(high_was_broken_array, i, current_high_was_broken)
+    
+    // Retracement Level Calculations (EXACT same as Dashboard)
+    // Only calculate retracement levels if we have valid HTF data
+    if not na(ticker_htfHigh) and not na(ticker_htfLow)
+        htfRange = ticker_htfHigh - ticker_htfLow
+        retrace25Value = htfRange * 0.25
+        retrace50Value = htfRange * 0.50
+        
+        // Calculate retracement levels and store in arrays (CRITICAL: Persist across bars)
+        if current_low_was_broken
+            array.set(bullish25Level_array, i, ticker_htfLow + retrace25Value)
+            array.set(bullish50Level_array, i, ticker_htfLow + retrace50Value)
+            array.set(bearish25Level_array, i, ticker_htfLow + retrace25Value)
+            array.set(bearish50Level_array, i, ticker_htfLow + retrace50Value)
+        else if current_high_was_broken
+            array.set(bullish25Level_array, i, ticker_htfHigh - retrace25Value)
+            array.set(bullish50Level_array, i, ticker_htfHigh - retrace50Value)
+            array.set(bearish25Level_array, i, ticker_htfHigh - retrace25Value)
+            array.set(bearish50Level_array, i, ticker_htfHigh - retrace50Value)
+        else
+            array.set(bullish25Level_array, i, ticker_htfHigh - retrace25Value)
+            array.set(bullish50Level_array, i, ticker_htfHigh - retrace50Value)
+            array.set(bearish25Level_array, i, ticker_htfLow + retrace25Value)
+            array.set(bearish50Level_array, i, ticker_htfLow + retrace50Value)
+    
+    // Get retracement levels from arrays for state machine
+    bullish25Level = array.get(bullish25Level_array, i)
+    bullish50Level = array.get(bullish50Level_array, i)
+    bearish25Level = array.get(bearish25Level_array, i)
+    bearish50Level = array.get(bearish50Level_array, i)
+    
+    // Apply State Machine (EXACT same as Dashboard - no na checks)
+    new_state = f_getState(ticker_htfHigh, ticker_htfLow, ticker_currentHigh, ticker_currentLow, ticker_currentClose, current_state, bullish25Level, bullish50Level, bearish25Level, bearish50Level)
+    
+    // DEBUG: Log state machine inputs for first few tickers
+    if i < 3 and barstate.islast
+        log_text = "TICKER " + str.tostring(i) + ": " + ticker_symbol + " " + timeframe_str + 
+                   " | HTF_H:" + str.tostring(ticker_htfHigh) + " HTF_L:" + str.tostring(ticker_htfLow) + 
+                   " | CLOSE:" + str.tostring(ticker_currentClose) + " | STATE:" + str.tostring(current_state) + "->" + str.tostring(new_state)
+        log.info(log_text)
+    
+    // Update state in array
+    array.set(ticker_states, i, new_state)
+
+// --- Table Creation ---
+if barstate.islast
+    // Create main radar table
+    radar_position = f_get_radar_position(table_position)
+    
+    // Create radar table (limited to 7 tickers to stay under 40-call limit)
+    num_tickers = math.min(array.size(tickers), 7)
+    num_timeframes = array.size(timeframes)
+    var radar_table = table.new(radar_position, num_timeframes + 1, num_tickers + 1, bgcolor=color.new(color.black, 80), border_width=1)
+    
+    // Clear table
+    table.clear(radar_table, 0, 0, num_timeframes, num_tickers)
+    
+    // Header row
+    table.cell(radar_table, 0, 0, "D&R Radar (7 tickers max)", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50), text_halign=text.align_center)
+    
+    // Timeframe headers
+    timeframe_labels = array.from("Daily", "Weekly", "Monthly", "Quarterly", "6M")
+    for col = 1 to num_timeframes
+        timeframe_label = array.get(timeframe_labels, col - 1)
+        table.cell(radar_table, col, 0, timeframe_label, text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50), text_halign=text.align_center)
+    
+    // Populate ticker rows
+    for row = 1 to num_tickers
+        ticker_symbol = array.get(tickers, row - 1)
+        ticker_name = str.replace(ticker_symbol, "NASDAQ:", "")
+        ticker_name := str.replace(ticker_name, "NYSE:", "")
+        ticker_name := str.replace(ticker_name, "AMEX:", "")
+        ticker_name := str.replace(ticker_name, "CBOE:", "")
+        
+        table.cell(radar_table, 0, row, ticker_name, text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 50), text_halign=text.align_left)
+        
+        // Populate state cells for each timeframe
+        for col = 1 to num_timeframes
+            array_index = (row - 1) * num_timeframes + (col - 1)
+            if array_index < array.size(ticker_states)
+                state = array.get(ticker_states, array_index)
+                state_text = f_getStateDescription(state)
+                state_color = f_getStateColor(state)
+                
+                display_text = state_text
+                
+                table.cell(radar_table, col, row, display_text, text_color=color.white, text_size=size.normal, bgcolor=state_color, text_halign=text.align_center)
+
+// --- Comprehensive Debug Table ---
+if show_debug_info and barstate.islast
+    // Create comprehensive debug table showing all ticker/timeframe data
+    var debug_comprehensive_table = table.new(position.middle_left, 6, math.min(array.size(ticker_symbols), 10) + 1, bgcolor=color.white, border_width=1)
+    
+    // Clear and populate comprehensive debug table
+    table.clear(debug_comprehensive_table, 0, 0, 5, math.min(array.size(ticker_symbols), 10))
+    
+    // Header
+    table.cell(debug_comprehensive_table, 0, 0, "Ticker", text_color=color.black, bgcolor=color.yellow, text_size=size.small)
+    table.cell(debug_comprehensive_table, 1, 0, "TF", text_color=color.black, bgcolor=color.yellow, text_size=size.small)
+    table.cell(debug_comprehensive_table, 2, 0, "HTF High", text_color=color.black, bgcolor=color.yellow, text_size=size.small)
+    table.cell(debug_comprehensive_table, 3, 0, "HTF Low", text_color=color.black, bgcolor=color.yellow, text_size=size.small)
+    table.cell(debug_comprehensive_table, 4, 0, "Current Close", text_color=color.black, bgcolor=color.yellow, text_size=size.small)
+    table.cell(debug_comprehensive_table, 5, 0, "State", text_color=color.black, bgcolor=color.yellow, text_size=size.small)
+    
+    // Populate debug data for each ticker/timeframe
+    max_debug_rows = math.min(array.size(ticker_symbols), 10) // Limit to 10 rows for readability
+    for debug_i = 0 to max_debug_rows - 1
+        debug_ticker_symbol = array.get(ticker_symbols, debug_i)
+        debug_timeframe_str = array.get(timeframe_strings, debug_i)
+        debug_current_state = array.get(ticker_states, debug_i)
+        debug_htf_high = array.get(stored_htf_high_array, debug_i)
+        debug_htf_low = array.get(stored_htf_low_array, debug_i)
+        debug_low_was_broken = array.get(low_was_broken_array, debug_i)
+        debug_high_was_broken = array.get(high_was_broken_array, debug_i)
+        
+        // Get current prices for this ticker/timeframe
+        [debug_htf_high_raw, debug_htf_low_raw, debug_htf_confirmed, debug_htf_bar_index, debug_ticker_high, debug_ticker_low, debug_ticker_close] = request.security(debug_ticker_symbol, debug_timeframe_str, [high, low, barstate.isconfirmed, bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+        
+        // Ticker name (shortened)
+        debug_ticker_name = str.replace(debug_ticker_symbol, "NASDAQ:", "")
+        debug_ticker_name := str.replace(debug_ticker_name, "NYSE:", "")
+        debug_ticker_name := str.replace(debug_ticker_name, "AMEX:", "")
+        debug_ticker_name := str.replace(debug_ticker_name, "CBOE:", "")
+        
+        // Timeframe (shortened)
+        debug_tf_short = str.replace(debug_timeframe_str, "1D", "D")
+        debug_tf_short := str.replace(debug_tf_short, "1W", "W")
+        debug_tf_short := str.replace(debug_tf_short, "1M", "M")
+        debug_tf_short := str.replace(debug_tf_short, "3M", "3M")
+        debug_tf_short := str.replace(debug_tf_short, "6M", "6M")
+        
+        // State description
+        debug_state_desc = f_getStateDescription(debug_current_state)
+        
+        // Populate row
+        table.cell(debug_comprehensive_table, 0, debug_i + 1, debug_ticker_name, text_color=color.black, text_size=size.tiny)
+        table.cell(debug_comprehensive_table, 1, debug_i + 1, debug_tf_short, text_color=color.black, text_size=size.tiny)
+        table.cell(debug_comprehensive_table, 2, debug_i + 1, na(debug_htf_high) ? "NA" : str.tostring(debug_htf_high, "#.##"), text_color=color.black, text_size=size.tiny)
+        table.cell(debug_comprehensive_table, 3, debug_i + 1, na(debug_htf_low) ? "NA" : str.tostring(debug_htf_low, "#.##"), text_color=color.black, text_size=size.tiny)
+        table.cell(debug_comprehensive_table, 4, debug_i + 1, na(debug_ticker_close) ? "NA" : str.tostring(debug_ticker_close, "#.##"), text_color=color.black, text_size=size.tiny)
+        table.cell(debug_comprehensive_table, 5, debug_i + 1, debug_state_desc, text_color=color.black, text_size=size.tiny)
+    
+    // Create second debug table showing break detection and retracement data
+    var debug_break_table = table.new(position.middle_left, 7, math.min(array.size(ticker_symbols), 8) + 1, bgcolor=color.white, border_width=1)
+    
+    // Position second table below first one
+    table.clear(debug_break_table, 0, 0, 6, math.min(array.size(ticker_symbols), 8))
+    
+    // Header for break detection table
+    table.cell(debug_break_table, 0, 0, "Ticker", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    table.cell(debug_break_table, 1, 0, "TF", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    table.cell(debug_break_table, 2, 0, "Low Brk", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    table.cell(debug_break_table, 3, 0, "High Brk", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    table.cell(debug_break_table, 4, 0, "Bull25%", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    table.cell(debug_break_table, 5, 0, "Bull50%", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    table.cell(debug_break_table, 6, 0, "Close vs", text_color=color.black, bgcolor=color.orange, text_size=size.small)
+    
+    // Populate break detection data
+    max_break_rows = math.min(array.size(ticker_symbols), 8)
+    for break_i = 0 to max_break_rows - 1
+        break_ticker_symbol = array.get(ticker_symbols, break_i)
+        break_timeframe_str = array.get(timeframe_strings, break_i)
+        break_low_was_broken = array.get(low_was_broken_array, break_i)
+        break_high_was_broken = array.get(high_was_broken_array, break_i)
+        break_bullish25 = array.get(bullish25Level_array, break_i)
+        break_bullish50 = array.get(bullish50Level_array, break_i)
+        
+        // Get current close for comparison
+        [break_htf_high_raw, break_htf_low_raw, break_htf_confirmed, break_htf_bar_index, break_ticker_high, break_ticker_low, break_ticker_close] = request.security(break_ticker_symbol, break_timeframe_str, [high, low, barstate.isconfirmed, bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+        
+        // Ticker name (shortened)
+        break_ticker_name = str.replace(break_ticker_symbol, "NASDAQ:", "")
+        break_ticker_name := str.replace(break_ticker_name, "NYSE:", "")
+        break_ticker_name := str.replace(break_ticker_name, "AMEX:", "")
+        break_ticker_name := str.replace(break_ticker_name, "CBOE:", "")
+        
+        // Timeframe (shortened)
+        break_tf_short = str.replace(break_timeframe_str, "1D", "D")
+        break_tf_short := str.replace(break_tf_short, "1W", "W")
+        break_tf_short := str.replace(break_tf_short, "1M", "M")
+        break_tf_short := str.replace(break_tf_short, "3M", "3M")
+        break_tf_short := str.replace(break_tf_short, "6M", "6M")
+        
+        // Close vs Bull25 comparison
+        close_vs_bull25 = na(break_bullish25) ? "NA" : (break_ticker_close > break_bullish25 ? "ABOVE" : "BELOW")
+        
+        // Populate row
+        table.cell(debug_break_table, 0, break_i + 1, break_ticker_name, text_color=color.black, text_size=size.tiny)
+        table.cell(debug_break_table, 1, break_i + 1, break_tf_short, text_color=color.black, text_size=size.tiny)
+        table.cell(debug_break_table, 2, break_i + 1, break_low_was_broken ? "YES" : "NO", text_color=color.black, text_size=size.tiny)
+        table.cell(debug_break_table, 3, break_i + 1, break_high_was_broken ? "YES" : "NO", text_color=color.black, text_size=size.tiny)
+        table.cell(debug_break_table, 4, break_i + 1, na(break_bullish25) ? "NA" : str.tostring(break_bullish25, "#.##"), text_color=color.black, text_size=size.tiny)
+        table.cell(debug_break_table, 5, break_i + 1, na(break_bullish50) ? "NA" : str.tostring(break_bullish50, "#.##"), text_color=color.black, text_size=size.tiny)
+        table.cell(debug_break_table, 6, break_i + 1, close_vs_bull25, text_color=color.black, text_size=size.tiny)
+
+// --- Debug Information (META Weekly Only) ---
+if show_debug_info and barstate.islast
+    // Find META Weekly data for debug comparison
+    meta_weekly_index = -1
+    for i = 0 to array.size(ticker_symbols) - 1
+        ticker_symbol = array.get(ticker_symbols, i)
+        timeframe_str = array.get(timeframe_strings, i)
+        if ticker_symbol == "NASDAQ:META" and timeframe_str == "1W"
+            meta_weekly_index := i
+            break
+    
+    if meta_weekly_index >= 0
+        // Get META Weekly HTF data
+        [debug_htf_high, debug_htf_low, debug_confirmed, debug_bar_index, debug_high, debug_low, debug_close] = request.security("NASDAQ:META", "1W", [high, low, barstate.isconfirmed, bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+        
+        // Use ticker's current prices for debug (same as main logic)
+        debug_current_high = debug_high
+        debug_current_low = debug_low
+        debug_current_close = debug_close
+        
+        // Get state
+        debug_state = array.get(ticker_states, meta_weekly_index)
+        debug_state_text = f_getStateDescription(debug_state)
+        
+        // Create debug table
+        var debug_table = table.new(f_get_debug_position(debug_main_position), 4, 10, bgcolor=color.white, border_width=1)
+        
+        // Clear and populate debug table
+        table.clear(debug_table, 0, 0, 3, 9)
+        
+        // Header
+        table.cell(debug_table, 0, 0, "Radar NASDAQ:META 1W", text_color=color.black, bgcolor=color.yellow, text_size=size.normal)
+        table.cell(debug_table, 1, 0, "Value", text_color=color.black, bgcolor=color.yellow, text_size=size.normal)
+        table.cell(debug_table, 2, 0, "Status", text_color=color.black, bgcolor=color.yellow, text_size=size.normal)
+        
+        // Data rows
+        table.cell(debug_table, 0, 1, "HTF High", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 1, str.tostring(debug_htf_high), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 1, na(debug_htf_high) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+        
+        table.cell(debug_table, 0, 2, "HTF Low", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 2, str.tostring(debug_htf_low), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 2, na(debug_htf_low) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+        
+        table.cell(debug_table, 0, 3, "Current High", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 3, str.tostring(debug_current_high), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 3, na(debug_current_high) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+        
+        table.cell(debug_table, 0, 4, "Current Low", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 4, str.tostring(debug_current_low), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 4, na(debug_current_low) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+        
+        table.cell(debug_table, 0, 5, "Current Close", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 5, str.tostring(debug_current_close), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 5, na(debug_current_close) ? "NA" : "OK", text_color=color.black, text_size=size.normal)
+        
+        table.cell(debug_table, 0, 6, "Confirmed", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 6, str.tostring(debug_confirmed), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 6, debug_confirmed ? "YES" : "NO", text_color=color.black, text_size=size.normal)
+        
+        table.cell(debug_table, 0, 7, "RADAR STATE", text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 1, 7, str.tostring(debug_state), text_color=color.black, text_size=size.normal)
+        table.cell(debug_table, 2, 7, debug_state_text, text_color=color.black, text_size=size.normal)
+        
+        // Add State Debug table (same as Dashboard approach - use current chart's ticker)
+        // Get current chart's ticker data for Weekly timeframe (same as Dashboard)
+        [debug_break_htf_high_raw, debug_break_htf_low_raw, debug_break_confirmed, debug_break_bar_index, debug_break_high, debug_break_low, debug_break_close] = request.security(syminfo.tickerid, "1W", [high, low, barstate.isconfirmed, bar_index, high, low, close], lookahead=barmerge.lookahead_off)
+        
+        // Store HTF values when confirmed (same as Dashboard approach)
+        var float debug_stored_htf_high = na
+        var float debug_stored_htf_low = na
+        
+        if debug_break_confirmed and not na(debug_break_htf_high_raw) and not na(debug_break_htf_low_raw)
+            debug_stored_htf_high := debug_break_htf_high_raw
+            debug_stored_htf_low := debug_break_htf_low_raw
+        
+        // Use stored values for calculations (same as Dashboard)
+        debug_break_htf_high = debug_stored_htf_high
+        debug_break_htf_low = debug_stored_htf_low
+        
+        // Declare debug retracement level variables outside conditional (persist across bars)
+        var float debug_break_bullish25Level = na
+        var float debug_break_bullish50Level = na
+        var float debug_break_bearish25Level = na
+        var float debug_break_bearish50Level = na
+        
+        // Only proceed with debug table if we have valid HTF data
+        if not na(debug_break_htf_high) and not na(debug_break_htf_low)
+            // Calculate break detection for current chart's ticker (same as Dashboard logic)
+            // Use global persistent variables (same as Dashboard)
+            
+            // Reset when new HTF bar forms
+            if debug_break_htf_high != debug_break_htf_high[1] or debug_break_htf_low != debug_break_htf_low[1]
+                debug_break_lowWasBroken := false
+                debug_break_highWasBroken := false
+            
+            // Detect breaks using current chart's prices vs HTF levels
+            if not na(debug_break_htf_low) and low < debug_break_htf_low
+                debug_break_lowWasBroken := true
+                debug_break_highWasBroken := false
+            if not na(debug_break_htf_high) and high > debug_break_htf_high
+                debug_break_highWasBroken := true
+                debug_break_lowWasBroken := false
+            
+            // Calculate retracement levels
+            debug_break_htfRange = debug_break_htf_high - debug_break_htf_low
+            debug_break_retrace25Value = debug_break_htfRange * 0.25
+            debug_break_retrace50Value = debug_break_htfRange * 0.50
+            
+            if debug_break_lowWasBroken
+                debug_break_bullish25Level := debug_break_htf_low + debug_break_retrace25Value
+                debug_break_bullish50Level := debug_break_htf_low + debug_break_retrace50Value
+                debug_break_bearish25Level := debug_break_htf_low + debug_break_retrace25Value
+                debug_break_bearish50Level := debug_break_htf_low + debug_break_retrace50Value
+            else if debug_break_highWasBroken
+                debug_break_bullish25Level := debug_break_htf_high - debug_break_retrace25Value
+                debug_break_bullish50Level := debug_break_htf_high - debug_break_retrace50Value
+                debug_break_bearish25Level := debug_break_htf_high - debug_break_retrace25Value
+                debug_break_bearish50Level := debug_break_htf_high - debug_break_retrace50Value
+            else
+                debug_break_bullish25Level := debug_break_htf_high - debug_break_retrace25Value
+                debug_break_bullish50Level := debug_break_htf_high - debug_break_retrace50Value
+                debug_break_bearish25Level := debug_break_htf_low + debug_break_retrace25Value
+                debug_break_bearish50Level := debug_break_htf_low + debug_break_retrace50Value
+            
+            // Create State Debug table
+            var state_debug_table = table.new(f_get_debug_position(debug_state_position), 3, 10, bgcolor=color.white, border_width=1)
+            
+            // Clear and populate state debug table
+            table.clear(state_debug_table, 0, 0, 2, 9)
+            
+            // Header
+            table.cell(state_debug_table, 0, 0, "Radar State Debug - " + syminfo.ticker + " 1W", text_color=color.black, bgcolor=color.yellow, text_size=size.normal)
+            table.cell(state_debug_table, 1, 0, "Value", text_color=color.black, bgcolor=color.yellow, text_size=size.normal)
+            table.cell(state_debug_table, 2, 0, "Result", text_color=color.black, bgcolor=color.yellow, text_size=size.normal)
+            
+            // Data rows
+            table.cell(state_debug_table, 0, 1, "Low Broken", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 1, str.tostring(debug_break_lowWasBroken), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 1, debug_break_lowWasBroken ? "YES" : "NO", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 2, "High Broken", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 2, str.tostring(debug_break_highWasBroken), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 2, debug_break_highWasBroken ? "YES" : "NO", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 3, "Bullish 25%", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 3, str.tostring(debug_break_bullish25Level), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 3, "Level", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 4, "Bullish 50%", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 4, str.tostring(debug_break_bullish50Level), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 4, "Level", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 5, "Bearish 25%", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 5, str.tostring(debug_break_bearish25Level), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 5, "Level", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 6, "Bearish 50%", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 6, str.tostring(debug_break_bearish50Level), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 6, "Level", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 7, "Close vs Bull25", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 7, str.tostring(close > debug_break_bullish25Level), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 7, close > debug_break_bullish25Level ? "ABOVE" : "BELOW", text_color=color.black, text_size=size.normal)
+            
+            table.cell(state_debug_table, 0, 8, "Close vs Bear25", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 8, str.tostring(close < debug_break_bearish25Level), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 8, close < debug_break_bearish25Level ? "BELOW" : "ABOVE", text_color=color.black, text_size=size.normal)
+            
+            // Calculate state for current chart's ticker (same as Dashboard approach)
+            debug_current_state = f_getState(debug_break_htf_high, debug_break_htf_low, high, low, close, 0, debug_break_bullish25Level, debug_break_bullish50Level, debug_break_bearish25Level, debug_break_bearish50Level)
+            debug_current_state_text = f_getStateDescription(debug_current_state)
+            
+            table.cell(state_debug_table, 0, 9, "RADAR STATE", text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 1, 9, str.tostring(debug_current_state), text_color=color.black, text_size=size.normal)
+            table.cell(state_debug_table, 2, 9, debug_current_state_text, text_color=color.black, text_size=size.normal)
+
+// --- Alert Conditions ---
+alertcondition(true, "D&R Radar Active", "D&R Radar is monitoring multiple tickers across multiple timeframes for state changes")
+alertcondition(true, "D&R State Change", "D&R state change detected on any monitored ticker/timeframe")
+alertcondition(true, "D&R No Data", "No recent D&R data available - check D&R Dashboard status")

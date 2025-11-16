@@ -1,0 +1,457 @@
+//@version=6
+// Pattern Pulse ORB Multi-Symbol Scanner - OPTIMIZED
+// Monitors 10-15 tickers for Opening Range Breakouts with minimal request.security() calls
+indicator("Pattern Pulse ORB Scanner", "ORB Scanner", overlay=true, max_labels_count=500, max_boxes_count=100, max_lines_count=100)
+
+// ============================================================================
+// USER INPUTS - SCANNER CONFIGURATION
+// ============================================================================
+
+// Ticker List (line-separated) - Enter one ticker per line in the text area
+symbols_input = input.text_area(defval="SPY\nQQQ\nIWM\nDIA\nTLT", title="Symbols to Monitor (one per line)", group="Scanner Settings", tooltip="Enter 10-15 tickers, one per line. Each symbol uses 2 request.security() calls.")
+
+// Opening Range Configuration
+i_orbMinutes = input.int(30, "Opening Range Duration (Minutes)", minval=1, maxval=120, group="ORB Settings", tooltip="Duration of the opening range in minutes from session start. Default is 30.")
+i_sessionStart = input.string("0930", "Session Start (HHMM)", group="ORB Settings", tooltip="Start time of regular trading session in HHMM format (Exchange Timezone).")
+
+// Alert Configuration
+i_enableBreakoutAlerts = input.bool(defval=true, title="Enable Breakout Alerts", group="Alert Settings")
+i_enableRetestAlerts = input.bool(defval=true, title="Enable Retest Confirmation Alerts", group="Alert Settings")
+i_minRetestBars = input.int(defval=2, title="Minimum Bars After Breakout for Retest", minval=1, maxval=10, group="Alert Settings", tooltip="How many bars must pass after breakout before retest can be confirmed")
+
+// Visual Settings
+i_showVisualMarkers = input.bool(defval=true, title="Show Visual Markers on Chart", group="Visual Settings")
+i_showDebugDashboard = input.bool(defval=true, title="Show Scanner Dashboard", group="Visual Settings")
+
+// ============================================================================
+// PARSE SYMBOL LIST
+// ============================================================================
+
+var string[] symbolList = array.new<string>()
+
+if barstate.isfirst
+    array.clear(symbolList)
+    symbols = str.split(symbols_input, "\n")
+    for i = 0 to array.size(symbols) - 1
+        symbol = array.get(symbols, i)
+        symbol := str.replace_all(symbol, " ", "")
+        symbol := str.replace_all(symbol, "\t", "")
+        symbol := str.replace_all(symbol, "\r", "")
+        if str.length(symbol) > 0
+            array.push(symbolList, symbol)
+
+int symbolCount = array.size(symbolList)
+
+// ============================================================================
+// CONSTANTS & LIMITS
+// ============================================================================
+
+// CRITICAL: Each symbol uses 2 request.security() calls
+// Limit: 40 total calls / 2 per symbol = 20 symbols max
+// Conservative: 15 symbols × 2 = 30 calls (safe buffer)
+int MAX_SYMBOLS = 15
+int CALLS_PER_SYMBOL = 2
+
+// ============================================================================
+// DEDUPLICATION SYSTEM
+// ============================================================================
+
+var string[] alertHashes = array.new<string>()
+var int totalAlertsFired = 0
+var int breakoutAlertsCount = 0
+var int retestAlertsCount = 0
+
+f_generateHash(symbol, eventType, timestamp, price) =>
+    str.tostring(timestamp) + "_" + symbol + "_" + eventType + "_" + str.tostring(price, "#.####")
+
+f_isDuplicate(hash) =>
+    bool found = false
+    if array.size(alertHashes) > 0
+        for i = 0 to array.size(alertHashes) - 1
+            if array.get(alertHashes, i) == hash
+                found := true
+                break
+    found
+
+f_storeHash(hash) =>
+    array.push(alertHashes, hash)
+    // Keep hash array manageable (last 1000 alerts)
+    if array.size(alertHashes) > 1000
+        array.shift(alertHashes)
+
+// ============================================================================
+// ORB STATE MANAGEMENT
+// ============================================================================
+
+type ORBState
+    string symbol
+    float orbHigh
+    float orbLow
+    bool rangeSet
+    int rangeDay
+    bool breakoutUpOccurred
+    bool breakoutDownOccurred
+    bool retestUpConfirmed
+    bool retestDownConfirmed
+    int breakoutUpBar
+    int breakoutDownBar
+    float breakoutUpPrice
+    float breakoutDownPrice
+    float retestUpPrice
+    float retestDownPrice
+
+var map<string, ORBState> g_orbStateMap = map.new<string, ORBState>()
+
+f_generateSymbolKey(symbol) =>
+    symbol + "|" + str.tostring(i_orbMinutes) + "|" + i_sessionStart
+
+// ============================================================================
+// TIME & SESSION UTILITIES
+// ============================================================================
+
+f_minutesToHHMM(_minutes) =>
+    int _h = math.floor(_minutes / 60)
+    int _m = math.floor(_minutes % 60)
+    string _hStr = _h < 10 ? "0" + str.tostring(_h) : str.tostring(_h)
+    string _mStr = _m < 10 ? "0" + str.tostring(_m) : str.tostring(_m)
+    _hStr + _mStr
+
+f_getSessionString(startTime, durationMinutes) =>
+    float startHour = str.tonumber(str.substring(startTime, 0, 2))
+    float startMinute = str.tonumber(str.substring(startTime, 2, 4))
+    float totalStartMinutes = startHour * 60 + startMinute
+    float totalEndMinutes = totalStartMinutes + durationMinutes
+    string sessionEndStr = f_minutesToHHMM(totalEndMinutes)
+    startTime + "-" + sessionEndStr
+
+f_getCurrentDay(timestamp) =>
+    math.floor(timestamp / 86400000)  // Days since epoch (using milliseconds)
+
+// ============================================================================
+// OPTIMIZED DATA STRUCTURE - Cache all data per symbol
+// ============================================================================
+
+type SymbolData
+    string symbol
+    float high
+    float low
+    float close
+    float prevClose
+    int barIndex
+    int prevBarIndex
+    float open
+    float volume
+    int timestamp
+    bool inSession
+    bool validData
+
+// OPTIMIZED: Fetch ALL data for a symbol in TWO request.security calls
+f_getSymbolData(symbol) =>
+    // CALL 1: Main price data tuple (1 request.security call)
+    [symHigh, symLow, symClose, symPrevClose, symOpen, symVolume, symTime, symBarIndex, symPrevBarIndex] = 
+         request.security(symbol, timeframe.period, 
+         [high, low, close, close[1], open, volume, time, bar_index, bar_index[1]], 
+         barmerge.gaps_off, barmerge.lookahead_off)
+    
+    // CALL 2: Session check (1 request.security call)
+    sessionString = f_getSessionString(i_sessionStart, i_orbMinutes)
+    inSession = request.security(symbol, timeframe.period, 
+         not na(time(timeframe.period, sessionString)), 
+         barmerge.gaps_off, barmerge.lookahead_off)
+    
+    // Validate data
+    validData = not na(symClose) and not na(symHigh) and not na(symLow)
+    
+    // Total: 2 request.security() calls per symbol
+    SymbolData.new(symbol, symHigh, symLow, symClose, symPrevClose, symBarIndex, symPrevBarIndex, 
+                   symOpen, symVolume, symTime, inSession, validData)
+
+// ============================================================================
+// ORB LOGIC - Uses cached data (NO new request calls)
+// ============================================================================
+
+f_processORB(data, orbState) =>
+    if not data.validData
+        [false, "", orbState]
+    else
+        currentDay = f_getCurrentDay(data.timestamp)
+        bool isNewDay = false
+        
+        // Check for new day
+        if orbState.rangeDay != currentDay
+            isNewDay := true
+            // Reset state for new day
+            orbState.orbHigh := na
+            orbState.orbLow := na
+            orbState.rangeSet := false
+            orbState.rangeDay := currentDay
+            orbState.breakoutUpOccurred := false
+            orbState.breakoutDownOccurred := false
+            orbState.retestUpConfirmed := false
+            orbState.retestDownConfirmed := false
+            orbState.breakoutUpBar := na
+            orbState.breakoutDownBar := na
+            orbState.breakoutUpPrice := na
+            orbState.breakoutDownPrice := na
+            orbState.retestUpPrice := na
+            orbState.retestDownPrice := na
+        
+        // Build opening range during session
+        if data.inSession and not orbState.rangeSet
+            if na(orbState.orbHigh)
+                orbState.orbHigh := data.high
+                orbState.orbLow := data.low
+            else
+                orbState.orbHigh := math.max(data.high, orbState.orbHigh)
+                orbState.orbLow := math.min(data.low, orbState.orbLow)
+        
+        // Lock range after session ends
+        if not data.inSession and not orbState.rangeSet and not na(orbState.orbHigh)
+            orbState.rangeSet := true
+        
+        // Detect events
+        string eventType = ""
+        bool eventOccurred = false
+        
+        if orbState.rangeSet and not na(orbState.orbHigh) and not na(orbState.orbLow)
+            // Breakout Up Detection
+            if not orbState.breakoutUpOccurred and i_enableBreakoutAlerts
+                if data.close > orbState.orbHigh and (na(data.prevClose) or data.prevClose <= orbState.orbHigh)
+                    eventType := "orb_breakout_up"
+                    eventOccurred := true
+                    orbState.breakoutUpOccurred := true
+                    orbState.breakoutUpBar := data.barIndex
+                    orbState.breakoutUpPrice := data.close
+            
+            // Breakout Down Detection
+            if not orbState.breakoutDownOccurred and i_enableBreakoutAlerts
+                if data.close < orbState.orbLow and (na(data.prevClose) or data.prevClose >= orbState.orbLow)
+                    eventType := "orb_breakout_down"
+                    eventOccurred := true
+                    orbState.breakoutDownOccurred := true
+                    orbState.breakoutDownBar := data.barIndex
+                    orbState.breakoutDownPrice := data.close
+            
+            // Retest Up Confirmation
+            if orbState.breakoutUpOccurred and not orbState.retestUpConfirmed and i_enableRetestAlerts
+                // Must be at least N bars after breakout
+                barsAfterBreakout = data.barIndex - nz(orbState.breakoutUpBar)
+                if barsAfterBreakout >= i_minRetestBars
+                    // Check if price touched/crossed back to ORB high
+                    if data.low <= orbState.orbHigh
+                        // Check if price bounced back above
+                        if data.close > orbState.orbHigh
+                            eventType := "orb_retest_up_confirmed"
+                            eventOccurred := true
+                            orbState.retestUpConfirmed := true
+                            orbState.retestUpPrice := data.close
+            
+            // Retest Down Confirmation
+            if orbState.breakoutDownOccurred and not orbState.retestDownConfirmed and i_enableRetestAlerts
+                barsAfterBreakout = data.barIndex - nz(orbState.breakoutDownBar)
+                if barsAfterBreakout >= i_minRetestBars
+                    if data.high >= orbState.orbLow
+                        if data.close < orbState.orbLow
+                            eventType := "orb_retest_down_confirmed"
+                            eventOccurred := true
+                            orbState.retestDownConfirmed := true
+                            orbState.retestDownPrice := data.close
+        
+        [eventOccurred, eventType, orbState]
+
+// ============================================================================
+// JSON PAYLOAD GENERATION - ORB SPECIFIC
+// ============================================================================
+
+f_buildORBJsonPayload(data, orbState, eventType) =>
+    // Calculate derived metrics
+    orbSize = orbState.orbHigh - orbState.orbLow
+    orbMidpoint = (orbState.orbHigh + orbState.orbLow) / 2
+    orbSizePercent = (orbSize / data.close) * 100
+    
+    // Calculate breakout distance
+    float breakoutDistance = 0.0
+    if eventType == "orb_breakout_up" or eventType == "orb_retest_up_confirmed"
+        breakoutDistance := data.close - orbState.orbHigh
+    else if eventType == "orb_breakout_down" or eventType == "orb_retest_down_confirmed"
+        breakoutDistance := orbState.orbLow - data.close
+    
+    breakoutDistancePercent = (breakoutDistance / orbSize) * 100
+    
+    // Direction
+    direction = (eventType == "orb_breakout_up" or eventType == "orb_retest_up_confirmed") ? "LONG" : "SHORT"
+    
+    // Build JSON (split to avoid string length limits)
+    json1 = '{"alert_type":"orb","event_timestamp":' + str.tostring(data.timestamp)
+    json2 = ',"ticker":"' + data.symbol + '"'
+    json3 = ',"chart_timeframe":"' + timeframe.period + '"'
+    json4 = ',"event_type":"' + eventType + '"'
+    json5 = ',"direction":"' + direction + '"'
+    json6 = ',"current_price":' + str.tostring(data.close, "#.####")
+    json7 = ',"orb_high":' + str.tostring(orbState.orbHigh, "#.####")
+    json8 = ',"orb_low":' + str.tostring(orbState.orbLow, "#.####")
+    json9 = ',"orb_midpoint":' + str.tostring(orbMidpoint, "#.####")
+    json10 = ',"orb_size":' + str.tostring(orbSize, "#.####")
+    json11 = ',"orb_size_percent":' + str.tostring(orbSizePercent, "#.##")
+    json12 = ',"breakout_distance":' + str.tostring(breakoutDistance, "#.####")
+    json13 = ',"breakout_distance_percent":' + str.tostring(breakoutDistancePercent, "#.##")
+    json14 = ',"orb_duration_minutes":' + str.tostring(i_orbMinutes)
+    json15 = ',"session_start":"' + i_sessionStart + '"'
+    json16 = ',"volume":' + str.tostring(data.volume, "#.##")
+    json17 = ',"breakout_up_occurred":' + str.tostring(orbState.breakoutUpOccurred)
+    json18 = ',"breakout_down_occurred":' + str.tostring(orbState.breakoutDownOccurred)
+    json19 = ',"retest_up_confirmed":' + str.tostring(orbState.retestUpConfirmed)
+    json20 = ',"retest_down_confirmed":' + str.tostring(orbState.retestDownConfirmed)
+    json21 = ',"scanner_symbol_count":' + str.tostring(symbolCount)
+    json22 = '}'
+    
+    json1 + json2 + json3 + json4 + json5 + json6 + json7 + json8 + json9 + json10 + 
+    json11 + json12 + json13 + json14 + json15 + json16 + json17 + json18 + json19 + 
+    json20 + json21 + json22
+
+// ============================================================================
+// MAIN SCANNER LOOP - OPTIMIZED
+// ============================================================================
+
+if barstate.isconfirmed and symbolCount > 0
+    int symbolsToProcess = math.min(symbolCount, MAX_SYMBOLS)
+    
+    // Warn if over limit
+    if symbolCount > MAX_SYMBOLS
+        runtime.error("Symbol count (" + str.tostring(symbolCount) + ") exceeds safe limit of " + str.tostring(MAX_SYMBOLS) + ". Processing first " + str.tostring(MAX_SYMBOLS) + " symbols only.")
+    
+    for i = 0 to symbolsToProcess - 1
+        currentSymbol = array.get(symbolList, i)
+        
+        // Get ALL data for this symbol (2 request.security calls)
+        data = f_getSymbolData(currentSymbol)
+        
+        if data.validData
+            // Get or create ORB state
+            symbolKey = f_generateSymbolKey(currentSymbol)
+            orbState = map.get(g_orbStateMap, symbolKey)
+            
+            if na(orbState)
+                orbState := ORBState.new(currentSymbol, na, na, false, 0, false, false, false, false, na, na, na, na, na, na)
+            
+            // Process ORB logic using cached data
+            [eventOccurred, eventType, updatedState] = f_processORB(data, orbState)
+            
+            // Update state
+            map.put(g_orbStateMap, symbolKey, updatedState)
+            
+            // Fire alert if event occurred
+            if eventOccurred and eventType != ""
+                hash = f_generateHash(currentSymbol, eventType, data.timestamp, data.close)
+                
+                if not f_isDuplicate(hash)
+                    jsonPayload = f_buildORBJsonPayload(data, updatedState, eventType)
+                    
+                    // Fire webhook alert
+                    alert(jsonPayload, alert.freq_once_per_bar_close)
+                    
+                    // Track for deduplication
+                    f_storeHash(hash)
+                    totalAlertsFired += 1
+                    
+                    // Track by type
+                    if str.contains(eventType, "breakout")
+                        breakoutAlertsCount += 1
+                    else if str.contains(eventType, "retest")
+                        retestAlertsCount += 1
+                    
+                    // Visual marker on chart (only for current chart symbol)
+                    if i_showVisualMarkers and currentSymbol == syminfo.tickerid
+                        labelText = currentSymbol + " " + eventType
+                        labelStyle = str.contains(eventType, "_up") ? label.style_label_up : label.style_label_down
+                        labelColor = str.contains(eventType, "_up") ? color.new(color.green, 20) : color.new(color.red, 20)
+                        label.new(bar_index, data.close, labelText, style=labelStyle, color=labelColor, textcolor=color.white, size=size.small)
+
+// ============================================================================
+// SCANNER STATUS DASHBOARD
+// ============================================================================
+
+if barstate.islast and i_showDebugDashboard
+    var table debugTable = table.new(position.top_right, 2, 9, border_width=2)
+    
+    // Header
+    table.cell(debugTable, 0, 0, "ORB Scanner Status", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=size.large)
+    table.cell(debugTable, 1, 0, "", bgcolor=color.new(color.blue, 50))
+    
+    // Symbols monitored
+    table.cell(debugTable, 0, 1, "Symbols", text_size=size.normal, bgcolor=color.new(color.gray, 90))
+    activeSymbols = math.min(symbolCount, MAX_SYMBOLS)
+    symbolsText = str.tostring(activeSymbols) + "/" + str.tostring(symbolCount)
+    symbolsBgColor = symbolCount > MAX_SYMBOLS ? color.new(color.orange, 50) : color.new(color.green, 80)
+    table.cell(debugTable, 1, 1, symbolsText, text_size=size.normal, text_color=color.white, bgcolor=symbolsBgColor)
+    
+    // Request.security() usage
+    table.cell(debugTable, 0, 2, "API Calls", text_size=size.normal, bgcolor=color.new(color.gray, 90))
+    totalCalls = activeSymbols * CALLS_PER_SYMBOL
+    callsText = str.tostring(totalCalls) + "/40"
+    callsBgColor = totalCalls > 35 ? color.new(color.red, 50) : (totalCalls > 30 ? color.new(color.orange, 50) : color.new(color.green, 80))
+    table.cell(debugTable, 1, 2, callsText, text_size=size.normal, text_color=color.white, bgcolor=callsBgColor)
+    
+    // ORB Settings
+    table.cell(debugTable, 0, 3, "ORB Duration", text_size=size.normal, bgcolor=color.new(color.gray, 90))
+    table.cell(debugTable, 1, 3, str.tostring(i_orbMinutes) + "m @ " + i_sessionStart, text_size=size.normal, text_color=color.white, bgcolor=color.new(color.gray, 85))
+    
+    // Breakout alerts
+    table.cell(debugTable, 0, 4, "Breakout Alerts", text_size=size.normal, bgcolor=color.new(color.gray, 90))
+    breakoutStatus = i_enableBreakoutAlerts ? "ON" : "OFF"
+    breakoutBgColor = i_enableBreakoutAlerts ? color.new(color.green, 50) : color.new(color.red, 50)
+    table.cell(debugTable, 1, 4, breakoutStatus, bgcolor=breakoutBgColor, text_size=size.normal, text_color=color.white)
+    
+    // Retest alerts
+    table.cell(debugTable, 0, 5, "Retest Alerts", text_size=size.normal, bgcolor=color.new(color.gray, 90))
+    retestStatus = i_enableRetestAlerts ? "ON (+" + str.tostring(i_minRetestBars) + " bars)" : "OFF"
+    retestBgColor = i_enableRetestAlerts ? color.new(color.green, 50) : color.new(color.red, 50)
+    table.cell(debugTable, 1, 5, retestStatus, bgcolor=retestBgColor, text_size=size.normal, text_color=color.white)
+    
+    // Total alerts fired
+    table.cell(debugTable, 0, 6, "Total Alerts", text_size=size.normal, bgcolor=color.new(color.gray, 90))
+    alertCountColor = totalAlertsFired > 0 ? color.new(color.green, 50) : color.new(color.orange, 50)
+    table.cell(debugTable, 1, 6, str.tostring(totalAlertsFired), text_size=size.normal, text_color=color.white, bgcolor=alertCountColor)
+    
+    // Breakout count
+    table.cell(debugTable, 0, 7, "  ↳ Breakouts", text_size=size.small, bgcolor=color.new(color.gray, 95))
+    table.cell(debugTable, 1, 7, str.tostring(breakoutAlertsCount), text_size=size.small, text_color=color.white, bgcolor=color.new(color.gray, 85))
+    
+    // Retest count
+    table.cell(debugTable, 0, 8, "  ↳ Retests", text_size=size.small, bgcolor=color.new(color.gray, 95))
+    table.cell(debugTable, 1, 8, str.tostring(retestAlertsCount), text_size=size.small, text_color=color.white, bgcolor=color.new(color.gray, 85))
+
+// ============================================================================
+// CHART VISUALIZATION (for current symbol only)
+// ============================================================================
+
+// Get current symbol's ORB state for visualization
+currentSymbolKey = f_generateSymbolKey(syminfo.tickerid)
+currentSymbolState = map.get(g_orbStateMap, currentSymbolKey)
+
+if not na(currentSymbolState) and currentSymbolState.rangeSet and i_showVisualMarkers
+    // Draw ORB lines
+    var line orbHighLine = na
+    var line orbLowLine = na
+    
+    if na(orbHighLine)
+        orbHighLine := line.new(bar_index, currentSymbolState.orbHigh, bar_index, currentSymbolState.orbHigh, 
+                                extend=extend.right, color=color.new(color.green, 50), width=2, style=line.style_dashed)
+        orbLowLine := line.new(bar_index, currentSymbolState.orbLow, bar_index, currentSymbolState.orbLow, 
+                               extend=extend.right, color=color.new(color.red, 50), width=2, style=line.style_dashed)
+    else
+        line.set_x2(orbHighLine, bar_index)
+        line.set_y1(orbHighLine, currentSymbolState.orbHigh)
+        line.set_y2(orbHighLine, currentSymbolState.orbHigh)
+        line.set_x2(orbLowLine, bar_index)
+        line.set_y1(orbLowLine, currentSymbolState.orbLow)
+        line.set_y2(orbLowLine, currentSymbolState.orbLow)
+        
+        // Highlight retest confirmations
+        if currentSymbolState.retestUpConfirmed
+            line.set_color(orbHighLine, color.new(color.green, 0))
+            line.set_style(orbHighLine, line.style_solid)
+        if currentSymbolState.retestDownConfirmed
+            line.set_color(orbLowLine, color.new(color.red, 0))
+            line.set_style(orbLowLine, line.style_solid)
+
